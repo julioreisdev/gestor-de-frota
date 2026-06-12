@@ -1,0 +1,3 @@
+modelo;placa;renavam;anoFabricacao;anoModelo;tipoCombustivel;cpfOuCnpj;nomeLocador;localizacao;valorUnitMensal;possuiMotorista;codigoCw
+Fiat Ducato;JKL-3456;45678901234;2023;2023;5;01234567000134;Facilita Locadora SA;2211001;3200.00;0;CW-000010/19
+Fiat Uno;MNO-7890;56789012345;2022;2023;5;78901234000123;Brasil Locações Ltda;2211001;3800.00;0;CW-000007/19

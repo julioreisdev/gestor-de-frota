@@ -1,0 +1,1666 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gestão de Frota Municipal</title>
+<script>
+// Carrega scripts externos sem bloquear o login
+function loadScript(src){var s=document.createElement('script');s.src=src;s.onerror=function(){console.warn('Script não carregado (sem internet?):',src);};document.head.appendChild(s);}
+window.addEventListener('DOMContentLoaded',function(){
+  loadScript('https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js');
+  loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+  loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js');
+  loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+});
+</script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',sans-serif;background:#EFF3F9;color:#1A2A3A;display:flex;min-height:100vh;font-size:13px}
+#login-screen{position:fixed;inset:0;background:linear-gradient(135deg,#0B1F3A 0%,#1B55A8 100%);display:flex;align-items:center;justify-content:center;z-index:9999}
+#login-box{background:#fff;border-radius:16px;padding:40px 36px;width:340px;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+#login-box .logo{text-align:center;margin-bottom:24px}
+#login-box .logo h1{font-size:20px;font-weight:700;color:#0B1F3A;margin-top:8px}
+#login-box .logo p{font-size:12px;color:#637085;margin-top:2px}
+#login-box label{display:block;font-size:11px;color:#637085;font-weight:600;margin-bottom:4px;margin-top:12px}
+#login-box input{width:100%;padding:9px 12px;border:1px solid #D5DDE8;border-radius:8px;font-size:13px;font-family:inherit}
+#login-box input:focus{outline:none;border-color:#1B55A8}
+#login-btn{width:100%;margin-top:20px;padding:10px;background:#1B55A8;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
+#login-btn:hover{background:#1644a0}
+#login-err{color:#C0392B;font-size:11px;margin-top:8px;text-align:center;min-height:16px}
+#sidebar{width:224px;background:#0B1F3A;color:#fff;display:flex;flex-direction:column;flex-shrink:0;position:fixed;top:0;left:0;height:100vh;overflow-y:auto;z-index:100}
+.sb-header{padding:16px 16px 12px;border-bottom:1px solid rgba(255,255,255,.1)}
+#sidebar nav{flex:1;padding:8px 0}
+.nav-btn{display:flex;align-items:center;gap:9px;width:100%;padding:10px 16px;background:none;border:none;cursor:pointer;color:rgba(255,255,255,.6);font-size:12px;font-weight:400;text-align:left;border-left:3px solid transparent;transition:all .15s}
+.nav-btn:hover{color:#fff;background:rgba(255,255,255,.07)}
+.nav-btn.active{color:#fff;background:rgba(255,255,255,.11);border-left-color:#F5A623;font-weight:600}
+.nav-btn.nav-hidden{display:none}
+.nav-sep{height:1px;background:rgba(255,255,255,.08);margin:6px 0}
+.sb-user{padding:10px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;justify-content:space-between;align-items:center}
+.sb-user span{font-size:10px;color:rgba(255,255,255,.5);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-user button{font-size:10px;color:#F5A623;background:none;border:none;cursor:pointer;white-space:nowrap}
+.sb-footer{padding:8px 16px;font-size:10px;color:rgba(255,255,255,.25)}
+#main{margin-left:224px;flex:1;padding:22px 26px;max-width:calc(100vw - 224px)}
+.page{display:none}.page.active{display:block}
+h2{font-size:18px;font-weight:600;margin-bottom:16px}
+.card{background:#fff;border-radius:10px;border:1px solid #D5DDE8;padding:16px 18px;margin-bottom:14px}
+.card-title{font-size:14px;font-weight:600;margin-bottom:12px}
+.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px}
+.kpi{background:#fff;border:1px solid #D5DDE8;border-radius:10px;padding:14px 16px;border-left:4px solid var(--c)}
+.kpi label{display:block;font-size:11px;color:#637085;font-weight:500;margin-bottom:3px}
+.kpi strong{font-size:20px;font-weight:700}
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead tr{background:#F5F8FC}
+th{padding:8px 9px;text-align:left;font-weight:600;color:#637085;border-bottom:1px solid #D5DDE8;white-space:nowrap;font-size:11px}
+td{padding:8px 9px;border-bottom:1px solid #EFF3F9;vertical-align:middle}
+tfoot td{background:#F5F8FC;font-weight:600}
+.tbl-wrap{overflow-x:auto}
+.badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.form-group{margin-bottom:10px}
+.form-group label{display:block;font-size:11px;color:#637085;font-weight:500;margin-bottom:2px}
+.form-group input,.form-group select,.form-group textarea{width:100%;padding:6px 9px;border:1px solid #D5DDE8;border-radius:6px;font-size:12px;background:#fff;color:#1A2A3A;font-family:inherit}
+.form-group input:focus,.form-group select:focus{outline:none;border-color:#1B55A8}
+.form-full{grid-column:1/-1}
+.btn{padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:500;border:none;font-family:inherit;white-space:nowrap}
+.btn-primary{background:#1B55A8;color:#fff}.btn-primary:hover{background:#1644a0}
+.btn-success{background:#1A8A4A;color:#fff}.btn-success:hover{background:#177a40}
+.btn-danger{background:#C0392B;color:#fff}
+.btn-warn{background:#D68A00;color:#fff}
+.btn-outline{background:#fff;color:#1B55A8;border:1px solid #1B55A8}
+.btn-sm{padding:3px 10px;font-size:11px}
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(11,31,58,.52);z-index:500;align-items:center;justify-content:center;padding:14px}
+.modal-bg.open{display:flex}
+.modal{background:#fff;border-radius:12px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;box-shadow:0 8px 40px rgba(0,0,0,.16)}
+.modal-lg{max-width:780px}
+.modal-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #D5DDE8}
+.modal-header h3{font-size:15px;font-weight:600}
+.modal-close{background:none;border:none;font-size:18px;cursor:pointer;color:#637085}
+.modal-body{padding:18px}
+.modal-footer{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px}
+.filters{display:flex;gap:8px;flex-wrap:wrap}
+.filters input,.filters select{padding:6px 9px;border:1px solid #D5DDE8;border-radius:6px;font-size:12px}
+.auth-num{background:#EBF2FC;border-radius:8px;padding:10px 12px;margin-bottom:14px}
+.auth-num label{display:block;font-size:11px;color:#637085;margin-bottom:2px}
+.auth-num strong{font-size:22px;font-weight:700;color:#1B55A8;font-family:monospace}
+.alert{padding:9px 12px;border-radius:6px;font-size:12px;margin-bottom:10px}
+.alert-err{background:#FFF0F0;border:1px solid #C0392B;color:#C0392B}
+.alert-ok{background:#E6F4EC;border:1px solid #1A8A4A;color:#1A8A4A}
+.alert-info{background:#EBF2FC;border:1px solid #1B55A8;color:#1B55A8}
+.alert-warn{background:#FFF3DC;border:1px solid #D68A00;color:#D68A00}
+.ic-btn{background:none;border:none;cursor:pointer;padding:2px 5px;border-radius:4px;font-size:13px}
+.ic-btn:hover{background:#EFF3F9}
+.ic-btn:disabled{opacity:.35;cursor:not-allowed}
+.stat-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+.stat{background:#fff;border:1px solid #D5DDE8;border-radius:10px;padding:12px 16px}
+.stat label{display:block;font-size:11px;color:#637085;font-weight:500;margin-bottom:3px}
+.stat strong{font-size:18px;font-weight:700}
+.exp-section{background:#fff;border-radius:10px;border:1px solid #D5DDE8;padding:18px;margin-bottom:14px}
+.exp-section h3{font-size:14px;font-weight:600;margin-bottom:4px;color:#1B55A8}
+.exp-section p{font-size:12px;color:#637085;margin-bottom:10px}
+.exp-section .cod{display:inline-block;background:#EBF2FC;color:#1B55A8;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;margin-bottom:6px}
+.exp-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.period-row{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-bottom:12px}
+.saldo-bar{height:7px;border-radius:4px;background:#E8ECF2;margin-top:3px;overflow:hidden}
+.saldo-fill{height:100%;border-radius:4px;transition:width .3s}
+@media print{
+  #login-screen,#sidebar,#main .toolbar,.exp-btns,.ic-btn,.btn,button{display:none!important}
+  body{background:#fff}#main{margin:0;padding:10px;max-width:100%}
+  .card{border:1px solid #ccc;break-inside:avoid}
+}
+@media(max-width:900px){
+  #sidebar{width:52px}
+  .sb-header p,.sb-header h1,.nav-btn span:last-child,.sb-footer,.sb-user span{display:none}
+  #main{margin-left:52px;max-width:calc(100vw - 52px);padding:14px}
+  .kpi-grid,.chart-grid{grid-template-columns:1fr 1fr}
+}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <div id="login-box">
+    <div class="logo">
+      <div style="font-size:42px">🚌</div>
+      <h1>Gestão de Frota</h1>
+      <p>Prefeitura Municipal — TCE-PI 2026</p>
+    </div>
+    <label>Usuário</label>
+    <input id="lg-user" type="text" placeholder="Digite o usuário" onkeydown="if(event.key==='Enter')doLogin()">
+    <label>Senha</label>
+    <input id="lg-pass" type="password" placeholder="Digite a senha" onkeydown="if(event.key==='Enter')doLogin()">
+    <button id="login-btn" onclick="doLogin()">Entrar</button>
+    <p id="login-err"></p>
+  </div>
+</div>
+
+<!-- SIDEBAR -->
+<nav id="sidebar">
+  <div class="sb-header">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <img id="sb-brasao" src="" alt="" style="width:32px;height:32px;border-radius:50%;object-fit:contain;display:none;background:#fff;padding:2px;flex-shrink:0">
+      <div>
+        <p id="sb-tipo-label" style="margin:0;font-size:9px;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:1px;font-weight:600">Prefeitura Municipal</p>
+        <p id="sb-mun-label" style="margin:0;font-size:10px;color:rgba(255,255,255,.65);font-weight:500;line-height:1.3">São Raimundo Nonato</p>
+      </div>
+    </div>
+    <h1 style="font-size:13px;font-weight:700;color:#fff;margin:0">🚌 Gestão de Frota</h1>
+  </div>
+  <nav id="sb-nav">
+    <button class="nav-btn active" data-page="dashboard" data-roles="admin,usuario,fornecedor" onclick="showPage('dashboard',this)"><span>📊</span><span>Dashboard</span></button>
+    <div class="nav-sep" data-sep-roles="admin"></div>
+    <button class="nav-btn" data-page="entidade" data-roles="admin" onclick="showPage('entidade',this)"><span>🏛️</span><span>Cadastro de Entidade</span></button>
+    <button class="nav-btn" data-page="usuarios" data-roles="admin" onclick="showPage('usuarios',this)"><span>👥</span><span>Usuários</span></button>
+    <button class="nav-btn" data-page="secretarias" data-roles="admin" onclick="showPage('secretarias',this)"><span>🏢</span><span>Secretarias</span></button>
+    <button class="nav-btn" data-page="veiculos" data-roles="admin" onclick="showPage('veiculos',this)"><span>🚗</span><span>Veículos</span></button>
+    <button class="nav-btn" data-page="fornecedores" data-roles="admin" onclick="showPage('fornecedores',this)"><span>⛽</span><span>Fornecedores</span></button>
+    <div class="nav-sep" data-sep-roles="admin,usuario,fornecedor"></div>
+    <button class="nav-btn" data-page="autorizacoes" data-roles="admin,usuario,fornecedor" onclick="showPage('autorizacoes',this)"><span>📋</span><span>Autorizações</span></button>
+    <button class="nav-btn" data-page="abastecimentos" data-roles="admin,usuario" onclick="showPage('abastecimentos',this)"><span>🛢️</span><span>Abastecimentos</span></button>
+    <div class="nav-sep" data-sep-roles="admin,usuario"></div>
+    <button class="nav-btn" data-page="relatorios" data-roles="admin,usuario" onclick="showPage('relatorios',this)"><span>📈</span><span>Relatórios</span></button>
+    <button class="nav-btn" data-page="exportacao" data-roles="admin,usuario" onclick="showPage('exportacao',this)"><span>📤</span><span>Exportação TCE-PI</span></button>
+  </nav>
+  <div class="sb-user">
+    <span id="sb-user-lbl">—</span>
+    <button onclick="doLogout()">↩ Sair</button>
+  </div>
+  <div class="sb-footer"><p>TCE-PI · Cód. 503/443/517 · 2026</p></div>
+</nav>
+
+<main id="main">
+
+<!-- DASHBOARD -->
+<div id="page-dashboard" class="page active">
+  <h2>Dashboard Gerencial</h2>
+  <div class="kpi-grid">
+    <div class="kpi" style="--c:#1B55A8"><label>Veículos</label><strong id="kpi-veic">0</strong></div>
+    <div class="kpi" style="--c:#27AE60"><label>Abastecimentos</label><strong id="kpi-abs">0</strong></div>
+    <div class="kpi" style="--c:#0F9D8B"><label>Total Litros</label><strong id="kpi-lit">0</strong></div>
+    <div class="kpi" style="--c:#F5A623"><label>Gasto Total</label><strong id="kpi-gasto">R$ 0,00</strong></div>
+  </div>
+  <div class="chart-grid">
+    <div class="card"><div class="card-title">Consumo por Secretaria (L)</div><div style="position:relative;height:200px"><canvas id="chart-sec"></canvas></div></div>
+    <div class="card"><div class="card-title">Combustível por Tipo (L)</div><div style="position:relative;height:200px"><canvas id="chart-comb"></canvas></div></div>
+  </div>
+  <div class="card"><div class="card-title">Gasto por Secretaria (R$)</div><div style="position:relative;height:170px"><canvas id="chart-gasto"></canvas></div></div>
+</div>
+
+<!-- CADASTRO DE ENTIDADE -->
+<div id="page-entidade" class="page">
+  <h2>Cadastro de Entidade</h2>
+  <div class="card">
+    <div class="card-title">⚙️ Dados da Entidade Municipal</div>
+    <div class="form-grid">
+      <div class="form-group"><label>Tipo de Entidade *</label>
+        <select id="cfg-tipo-entidade" onchange="onEntidadeChange()">
+          <option value="Prefeitura Municipal">Prefeitura Municipal</option>
+          <option value="Câmara Municipal">Câmara Municipal</option>
+          <option value="Fundo Municipal de Saúde">Fundo Municipal de Saúde</option>
+          <option value="Fundo Municipal de Assistência Social">Fundo Municipal de Assistência Social</option>
+          <option value="Fundo Municipal de Educação">Fundo Municipal de Educação</option>
+          <option value="Instituto de Previdência Municipal">Instituto de Previdência Municipal</option>
+          <option value="Autarquia Municipal">Autarquia Municipal</option>
+          <option value="Fundação Municipal">Fundação Municipal</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Município (Piauí) *</label>
+        <select id="cfg-municipio-sel" onchange="onMunicipioChange(this)"><option value="">Selecione...</option></select>
+      </div>
+      <div class="form-group"><label>Código IBGE</label>
+        <input id="cfg-ibge" value="2210607" readonly style="background:#F5F8FC;color:#637085">
+      </div>
+      <div class="form-group"><label>Mês de Referência Padrão</label>
+        <input id="cfg-mesref" type="month" value="2026-05">
+      </div>
+      <div class="form-group form-full"><label>Órgão/Entidade (gerado automaticamente)</label>
+        <input id="cfg-orgao" value="Prefeitura Municipal de São Raimundo Nonato" readonly style="background:#F5F8FC;color:#637085">
+      </div>
+    </div>
+    <input type="hidden" id="cfg-municipio" value="São Raimundo Nonato">
+    <div style="margin-top:14px;padding-top:12px;border-top:1px dashed #D5DDE8">
+      <p style="font-size:11px;font-weight:600;color:#637085;margin-bottom:8px">🛡️ Brasão Municipal (opcional)</p>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <div style="width:72px;height:72px;border:2px dashed #D5DDE8;border-radius:8px;display:flex;align-items:center;justify-content:center;background:#F5F8FC;overflow:hidden;flex-shrink:0">
+          <img id="brasao-preview" src="" alt="" style="max-width:68px;max-height:68px;object-fit:contain;display:none">
+          <span id="brasao-ph" style="font-size:22px">🛡️</span>
+        </div>
+        <div>
+          <label class="btn btn-outline btn-sm" style="cursor:pointer;display:inline-block">📁 Selecionar imagem
+            <input type="file" id="brasao-file" accept="image/*" style="display:none" onchange="loadBrasao(this)">
+          </label>
+          <button class="btn btn-sm" style="background:#FDECEC;color:#C0392B;border:1px solid #C0392B;margin-left:6px" onclick="removeBrasao()">✕ Remover</button>
+          <p style="font-size:10px;color:#637085;margin-top:4px">PNG, JPG ou SVG · fundo transparente recomendado</p>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:14px;display:flex;align-items:center;gap:10px">
+      <button class="btn btn-primary" onclick="salvarConfiguracoes()">💾 Salvar Configurações</button>
+      <span id="cfg-salvo" style="font-size:11px;color:#1A8A4A;display:none">✓ Configurações salvas!</span>
+    </div>
+  </div>
+</div>
+
+<!-- SECRETARIAS -->
+<div id="page-secretarias" class="page">
+  <div class="toolbar"><h2 style="margin:0">Secretarias e Órgãos</h2><button class="btn btn-primary" onclick="openSecModal()">+ Nova Secretaria</button></div>
+  <div id="sec-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px"></div>
+</div>
+
+<!-- VEÍCULOS -->
+<div id="page-veiculos" class="page">
+  <div class="toolbar"><h2 style="margin:0">Cadastro de Veículos</h2><button class="btn btn-primary" onclick="openVeiculoModal()">+ Novo Veículo</button></div>
+  <div class="card">
+    <div class="filters" style="margin-bottom:10px">
+      <input id="fv-search" placeholder="Buscar placa, modelo..." oninput="renderVeiculos()" style="flex:1;min-width:160px">
+      <select id="fv-sec" onchange="renderVeiculos()"><option value="">Todas Secretarias</option></select>
+      <select id="fv-comb" onchange="renderVeiculos()"><option value="">Todos Combustíveis</option></select>
+      <select id="fv-orig" onchange="renderVeiculos()"><option value="">Todas Origens</option></select>
+    </div>
+    <p id="veic-count" style="font-size:11px;color:#637085;margin-bottom:8px"></p>
+    <div class="tbl-wrap"><table id="tbl-veiculos"><thead><tr><th>Código</th><th>Placa</th><th>Modelo/Marca</th><th>Ano</th><th>Tipo</th><th>Combustível</th><th>Origem</th><th>Secretaria</th><th>KM Atual</th><th>Situação</th><th>Ações</th></tr></thead><tbody></tbody></table></div>
+  </div>
+</div>
+
+<!-- FORNECEDORES -->
+<div id="page-fornecedores" class="page">
+  <div class="toolbar"><h2 style="margin:0">Fornecedores / Postos</h2><button class="btn btn-primary" onclick="openForModal()">+ Novo Fornecedor</button></div>
+  <div id="for-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px"></div>
+</div>
+
+<!-- AUTORIZAÇÕES -->
+<div id="page-autorizacoes" class="page">
+  <div class="toolbar">
+    <h2 style="margin:0">Autorizações de Abastecimento</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input id="f-aut-q" placeholder="Buscar nº, placa..." oninput="renderAut()" style="padding:6px 9px;border:1px solid #D5DDE8;border-radius:6px;font-size:12px;width:150px">
+      <select id="f-aut-sit" onchange="renderAut()" style="padding:6px 9px;border:1px solid #D5DDE8;border-radius:6px;font-size:12px"><option value="">Todas situações</option><option>Emitida</option><option>Utilizada</option><option>Cancelada</option></select>
+      <button class="btn btn-success" id="btn-nova-aut" onclick="openAutModal()">+ Emitir Autorização</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="tbl-wrap"><table id="tbl-aut"><thead><tr><th>Nº Autorização</th><th>Data</th><th>Veículo</th><th>Placa</th><th>Secretaria</th><th>Fornecedor</th><th>Combustível</th><th>Qtd (L)</th><th>Valor</th><th>Situação</th><th>Ações</th></tr></thead><tbody></tbody></table></div>
+  </div>
+</div>
+
+<!-- ABASTECIMENTOS -->
+<div id="page-abastecimentos" class="page">
+  <div class="toolbar">
+    <h2 style="margin:0">Controle de Abastecimentos</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-warn" onclick="openImportAutModal()">📋 Importar de Autorizações</button>
+      <button class="btn btn-primary" onclick="openAbsModal()">+ Registrar Manual</button>
+    </div>
+  </div>
+  <div class="stat-row">
+    <div class="stat"><label>Total de Registros</label><strong id="abs-count">0</strong></div>
+    <div class="stat"><label>Total de Litros</label><strong id="abs-litros">0</strong></div>
+    <div class="stat"><label>Valor Total</label><strong id="abs-valor">R$ 0,00</strong></div>
+  </div>
+  <div class="card">
+    <div class="filters" style="margin-bottom:10px">
+      <select id="f-abs-sec" onchange="renderAbastecimentos()"><option value="">Todas Secretarias</option></select>
+      <input type="month" id="f-abs-mes" onchange="renderAbastecimentos()">
+    </div>
+    <div class="tbl-wrap"><table id="tbl-abs">
+      <thead><tr><th>Data</th><th>Placa</th><th>Secretaria</th><th>Fornecedor</th><th>Combustível</th><th>Qtd (L)</th><th>Vlr Unit.</th><th>Total</th><th>KM Ini.</th><th>KM Fin.</th><th>Responsável</th><th>Ações</th></tr></thead>
+      <tbody></tbody>
+      <tfoot><tr><td colspan="5" style="font-weight:600">TOTAIS</td><td id="abs-tfoot-lit"></td><td>—</td><td id="abs-tfoot-val" style="color:#1A8A4A"></td><td colspan="4"></td></tr></tfoot>
+    </table></div>
+  </div>
+</div>
+
+<!-- RELATÓRIOS -->
+<div id="page-relatorios" class="page">
+  <div class="toolbar">
+    <h2 style="margin:0">Relatórios Gerenciais</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-danger" onclick="exportRelPDF()">📕 PDF (com filtros)</button>
+      <button class="btn btn-success" onclick="exportRelXLS()">📊 Excel (com filtros)</button>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:14px">
+    <p style="font-size:11px;font-weight:600;color:#637085;margin-bottom:8px">🔍 Filtros</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:8px">
+      <div class="form-group" style="margin:0"><label>Veículo</label><select id="rf-veic" onchange="renderRelatorios()"><option value="">Todos</option></select></div>
+      <div class="form-group" style="margin:0"><label>Secretaria</label><select id="rf-sec" onchange="renderRelatorios()"><option value="">Todas</option></select></div>
+      <div class="form-group" style="margin:0"><label>Fornecedor</label><select id="rf-for" onchange="renderRelatorios()"><option value="">Todos</option></select></div>
+      <div class="form-group" style="margin:0"><label>Combustível</label><select id="rf-comb" onchange="renderRelatorios()"><option value="">Todos</option></select></div>
+      <div class="form-group" style="margin:0"><label>Origem</label><select id="rf-orig" onchange="renderRelatorios()"><option value="">Todas</option></select></div>
+      <div class="form-group" style="margin:0"><label>Data Inicial</label><input type="date" id="rf-ini" onchange="renderRelatorios()"></div>
+      <div class="form-group" style="margin:0"><label>Data Final</label><input type="date" id="rf-fim" onchange="renderRelatorios()"></div>
+      <div style="display:flex;align-items:flex-end"><button class="btn btn-outline btn-sm" onclick="limparFiltrosRel()">✕ Limpar</button></div>
+    </div>
+    <p id="rel-resumo" style="font-size:11px;color:#637085;margin-top:8px"></p>
+  </div>
+  <div class="card"><div class="card-title">Por Veículo</div><div class="tbl-wrap"><table id="tbl-rel-veic"><thead><tr><th>Placa</th><th>Modelo</th><th>Secretaria</th><th>Origem</th><th>Nº Abs.</th><th>Total Litros</th><th>Total Gasto</th><th>KM Rodados</th><th>Consumo (km/L)</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card"><div class="card-title">Por Secretaria</div><div class="tbl-wrap"><table id="tbl-rel-sec"><thead><tr><th>Sigla</th><th>Secretaria</th><th>Nº Abs.</th><th>Total Litros</th><th>Total Gasto</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card"><div class="card-title">Por Fornecedor</div><div class="tbl-wrap"><table id="tbl-rel-for"><thead><tr><th>Fornecedor</th><th>Nº Abs.</th><th>Total Litros</th><th>Total Faturado</th></tr></thead><tbody></tbody></table></div></div>
+</div>
+
+<!-- EXPORTAÇÃO TCE-PI -->
+<div id="page-exportacao" class="page">
+  <h2>Exportação TCE-PI</h2>
+  <div class="alert alert-info" style="margin-bottom:14px">ℹ️ Os arquivos CSV seguem o formato técnico do TCE-PI. Configure a entidade em <b>Cadastro de Entidade</b> antes de exportar.</div>
+  <div class="exp-section">
+    <span class="cod">Cód. 517</span><h3>Relatório de Abastecimento de Veículos</h3>
+    <p>Controle mensal de consumo por veículo: quantidade, combustível e quilometragem.</p>
+    <div class="period-row">
+      <div class="form-group" style="margin:0"><label>Data Inicial</label><input type="date" id="exp-abs-ini"></div>
+      <div class="form-group" style="margin:0"><label>Data Final</label><input type="date" id="exp-abs-fim"></div>
+      <div></div>
+    </div>
+    <div class="exp-btns">
+      <button class="btn btn-primary" onclick="exportTCEAbs('csv')">📄 Exportar CSV (TCE-PI)</button>
+      <button class="btn btn-danger" onclick="exportTCEAbs('pdf')">📕 Exportar PDF</button>
+    </div>
+  </div>
+  <div class="exp-section">
+    <span class="cod">Cód. 503</span><h3>Relação de Veículos Próprios e/ou Cedidos</h3>
+    <p>Veículos do patrimônio público com características técnicas, estado de conservação e dados de cessão.</p>
+    <div class="exp-btns">
+      <button class="btn btn-primary" onclick="exportTCEPropCed('csv')">📄 Exportar CSV (TCE-PI)</button>
+      <button class="btn btn-danger" onclick="exportTCEPropCed('pdf')">📕 Exportar PDF</button>
+    </div>
+  </div>
+  <div class="exp-section">
+    <span class="cod">Cód. 443</span><h3>Relação dos Veículos Locados e Sublocados</h3>
+    <p>Veículos alugados com dados do locador, valor mensal e indicação de motorista.</p>
+    <div class="exp-btns">
+      <button class="btn btn-primary" onclick="exportTCELocSub('csv')">📄 Exportar CSV (TCE-PI)</button>
+      <button class="btn btn-danger" onclick="exportTCELocSub('pdf')">📕 Exportar PDF</button>
+    </div>
+  </div>
+</div>
+
+<!-- USUÁRIOS -->
+<div id="page-usuarios" class="page">
+  <div class="toolbar">
+    <h2 style="margin:0">Gerenciar Usuários</h2>
+    <button class="btn btn-primary" onclick="openUserModal()">+ Novo Usuário</button>
+  </div>
+  <div class="card">
+    <div class="tbl-wrap">
+      <table id="tbl-users">
+        <thead><tr>
+          <th>Login</th><th>Nome</th><th>Perfil</th>
+          <th>Acesso de</th><th>Acesso até</th><th>Status</th><th>Ações</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<!-- ═══ MODAIS ════════════════════════════════════════════════ -->
+
+<!-- Modal Veículo -->
+<div class="modal-bg" id="modal-veiculo">
+<div class="modal modal-lg">
+  <div class="modal-header"><h3 id="mveic-title">Novo Veículo</h3><button class="modal-close" onclick="closeModal('modal-veiculo')">✕</button></div>
+  <div class="modal-body">
+    <div class="form-grid">
+      <div class="form-group"><label>Código Interno</label><input id="v-codigo"></div>
+      <div class="form-group"><label>Placa *</label><input id="v-placa" oninput="this.value=this.value.toUpperCase()"></div>
+      <div class="form-group"><label>RENAVAM (11 dígitos) *</label><input id="v-renavam"></div>
+      <div class="form-group"><label>Chassi</label><input id="v-chassi" oninput="this.value=this.value.toUpperCase()"></div>
+      <div class="form-group"><label>Modelo *</label><input id="v-modelo"></div>
+      <div class="form-group"><label>Marca *</label><input id="v-marca"></div>
+      <div class="form-group"><label>Ano de Fabricação *</label><input id="v-anofab" type="number"></div>
+      <div class="form-group"><label>Ano do Modelo *</label><input id="v-anomod" type="number"></div>
+      <div class="form-group"><label>Tipo de Veículo *</label><select id="v-tipo"></select></div>
+      <div class="form-group"><label>Combustível *</label><select id="v-comb"></select></div>
+      <div class="form-group"><label>Origem *</label><select id="v-origem" onchange="updateVeicFields()"></select></div>
+      <div class="form-group"><label>Secretaria *</label><select id="v-sec"></select></div>
+      <div class="form-group"><label>Capacidade Tanque (L)</label><input id="v-cap" type="number"></div>
+      <div class="form-group"><label>KM Atual</label><input id="v-km" type="number"></div>
+      <div class="form-group"><label>Estado de Conservação</label><select id="v-sit"><option>Ótimo</option><option>Bom</option><option>Regular</option><option>Ruim</option><option>Inativo</option></select></div>
+      <div class="form-group"><label>Data de Aquisição</label><input id="v-dtaq" type="date"></div>
+    </div>
+    <div id="campos-locado" style="display:none">
+      <p style="font-size:11px;font-weight:600;color:#1B55A8;margin:8px 0;border-top:1px dashed #D5DDE8;padding-top:8px">📋 Dados do Contrato de Locação (Cód. 443)</p>
+      <div class="form-grid">
+        <div class="form-group"><label>CPF/CNPJ Locador *</label><input id="v-cpfcnpj"></div>
+        <div class="form-group"><label>Nome do Locador *</label><input id="v-locador"></div>
+        <div class="form-group"><label>Valor Mensal (R$)</label><input id="v-valmensal" type="number" step="0.01"></div>
+        <div class="form-group"><label>Possui Motorista?</label><select id="v-motorista"><option value="0">Não</option><option value="1">Sim</option></select></div>
+        <div class="form-group"><label>Código CW</label><input id="v-cw" placeholder="CW-XXXXXX/XX"></div>
+      </div>
+    </div>
+    <div id="campos-cedido" style="display:none">
+      <p style="font-size:11px;font-weight:600;color:#1B55A8;margin:8px 0;border-top:1px dashed #D5DDE8;padding-top:8px">📋 Dados da Cessão (Cód. 503)</p>
+      <div class="form-grid">
+        <div class="form-group"><label>Órgão de Destino</label><input id="v-orgaodest"></div>
+        <div class="form-group"></div>
+        <div class="form-group"><label>Data Início Cessão</label><input id="v-dtinices" type="date"></div>
+        <div class="form-group"><label>Data Fim Cessão</label><input id="v-dtfimces" type="date"></div>
+      </div>
+    </div>
+    <div class="form-group"><label>Observações</label><input id="v-obs"></div>
+    <div id="v-erros" class="alert alert-err" style="display:none"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-veiculo')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveVeiculo()">Salvar</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Modal Secretaria -->
+<div class="modal-bg" id="modal-sec">
+<div class="modal" style="max-width:460px">
+  <div class="modal-header"><h3 id="msec-title">Nova Secretaria</h3><button class="modal-close" onclick="closeModal('modal-sec')">✕</button></div>
+  <div class="modal-body">
+    <div class="form-group"><label>Nome *</label><input id="s-nome"></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Sigla *</label><input id="s-sigla" oninput="this.value=this.value.toUpperCase()"></div>
+      <div class="form-group"><label>Centro de Custo</label><input id="s-cc"></div>
+      <div class="form-group"><label>Responsável</label><input id="s-resp"></div>
+      <div class="form-group"><label>Telefone</label><input id="s-tel"></div>
+      <div class="form-group form-full"><label>E-mail</label><input id="s-email" type="email"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-sec')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveSec()">Salvar</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Modal Fornecedor -->
+<div class="modal-bg" id="modal-for">
+<div class="modal modal-lg">
+  <div class="modal-header"><h3 id="mfor-title">Novo Fornecedor</h3><button class="modal-close" onclick="closeModal('modal-for')">✕</button></div>
+  <div class="modal-body">
+    <div class="form-grid">
+      <div class="form-group form-full"><label>Razão Social *</label><input id="f-razao"></div>
+      <div class="form-group"><label>Nome Fantasia</label><input id="f-fantasia"></div>
+      <div class="form-group"><label>CNPJ *</label><input id="f-cnpj"></div>
+      <div class="form-group"><label>Responsável</label><input id="f-resp"></div>
+      <div class="form-group"><label>Telefone</label><input id="f-tel"></div>
+      <div class="form-group form-full"><label>Endereço</label><input id="f-end"></div>
+      <div class="form-group"><label>Cidade</label><input id="f-cidade"></div>
+    </div>
+    <p style="font-size:11px;font-weight:600;color:#1B55A8;margin:10px 0 4px">⛽ Combustíveis · Preços · Saldo de Contrato</p>
+    <div class="alert alert-info" style="font-size:11px;margin-bottom:8px">Saldo 0 = ilimitado. O saldo disponível é debitado ao emitir autorizações.</div>
+    <div id="for-combs"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-for')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveFor()">Salvar</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Modal Atualizar Saldo -->
+<div class="modal-bg" id="modal-saldo">
+<div class="modal" style="max-width:440px">
+  <div class="modal-header"><h3>Atualizar Saldo do Contrato</h3><button class="modal-close" onclick="closeModal('modal-saldo')">✕</button></div>
+  <div class="modal-body">
+    <div id="saldo-for-info" style="background:#F5F8FC;border-radius:6px;padding:8px 10px;margin-bottom:12px;font-size:12px;font-weight:600"></div>
+    <div id="saldo-fields"></div>
+    <div id="saldo-erros" class="alert alert-err" style="display:none"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-saldo')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveSaldo()">💾 Salvar Saldo</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Modal Autorização -->
+<div class="modal-bg" id="modal-aut">
+<div class="modal">
+  <div class="modal-header"><h3>Emitir Autorização de Abastecimento</h3><button class="modal-close" onclick="closeModal('modal-aut')">✕</button></div>
+  <div class="modal-body">
+    <div class="auth-num"><label>Número (gerado automaticamente)</label><strong id="aut-num-disp">—</strong></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Data *</label><input id="a-data" type="date"></div>
+      <div class="form-group"><label>Responsável *</label><input id="a-resp"></div>
+    </div>
+    <div class="form-group"><label>Veículo *</label><select id="a-veiculo" onchange="onAutVeic()"></select></div>
+    <div id="a-veic-info" style="display:none;background:#F5F8FC;border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:#637085"></div>
+    <div class="form-group"><label>Fornecedor *</label><select id="a-forn" onchange="onAutFor()"></select></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Combustível *</label><select id="a-comb" onchange="onAutComb()"></select></div>
+      <div class="form-group"><label>Quantidade (L) * <span id="a-saldo-hint" style="font-size:10px;color:#D68A00;font-weight:600"></span></label><input id="a-qtd" type="number" step="0.01" oninput="calcAutTotal()"></div>
+    </div>
+    <div id="a-saldo-bar-wrap" style="display:none;margin-bottom:10px">
+      <div style="font-size:11px;color:#637085;margin-bottom:3px" id="a-saldo-txt"></div>
+      <div class="saldo-bar"><div class="saldo-fill" id="a-saldo-fill"></div></div>
+    </div>
+    <div id="a-total" style="display:none" class="alert alert-ok"></div>
+    <div class="form-group"><label>Observações</label><input id="a-obs"></div>
+    <div id="a-erros" class="alert alert-err" style="display:none"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-aut')">Cancelar</button>
+      <button class="btn btn-success" onclick="saveAut()">✓ Emitir Autorização</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Modal Abastecimento Manual -->
+<div class="modal-bg" id="modal-abs">
+<div class="modal">
+  <div class="modal-header"><h3>Registrar Abastecimento Manual</h3><button class="modal-close" onclick="closeModal('modal-abs')">✕</button></div>
+  <div class="modal-body">
+    <div class="form-grid">
+      <div class="form-group"><label>Data *</label><input id="ab-data" type="date"></div>
+      <div class="form-group"><label>Responsável *</label><input id="ab-resp"></div>
+    </div>
+    <div class="form-group"><label>Veículo *</label><select id="ab-veiculo" onchange="onAbsVeic()"></select></div>
+    <div id="ab-veic-info" style="display:none;background:#F5F8FC;border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:#637085"></div>
+    <div class="form-group"><label>Fornecedor *</label><select id="ab-forn" onchange="onAbsFor()"></select></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Combustível *</label><select id="ab-comb" onchange="calcAbsTotal()"></select></div>
+      <div class="form-group"><label>Quantidade (L) *</label><input id="ab-qtd" type="number" oninput="calcAbsTotal()"></div>
+      <div class="form-group"><label>Valor Unitário (R$/L)</label><input id="ab-vunit" type="number" step="0.01" oninput="calcAbsTotal()"></div>
+      <div class="form-group"><label>KM Inicial</label><input id="ab-kmi" type="number"></div>
+      <div class="form-group"><label>KM Final</label><input id="ab-kmf" type="number"></div>
+    </div>
+    <div id="ab-total" style="display:none" class="alert alert-ok"></div>
+    <div class="form-group"><label>Observações</label><input id="ab-obs"></div>
+    <div id="ab-erros" class="alert alert-err" style="display:none"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-abs')">Cancelar</button>
+      <button class="btn btn-success" onclick="saveAbs()">✓ Registrar</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Modal Importar Autorizações -->
+<div class="modal-bg" id="modal-import-aut">
+<div class="modal modal-lg">
+  <div class="modal-header"><h3>Importar Abastecimentos de Autorizações</h3><button class="modal-close" onclick="closeModal('modal-import-aut')">✕</button></div>
+  <div class="modal-body">
+    <div class="alert alert-info" style="margin-bottom:12px">Selecione autorizações <b>Emitidas</b> para converter em registros de abastecimento. Atualize os campos KM após importar.</div>
+    <div class="form-grid" style="margin-bottom:12px">
+      <div class="form-group"><label>Data Inicial *</label><input type="date" id="imp-ini" oninput="filtrarAutParaImport()"></div>
+      <div class="form-group"><label>Data Final *</label><input type="date" id="imp-fim" oninput="filtrarAutParaImport()"></div>
+    </div>
+    <div id="imp-tabela-wrap"><p style="color:#637085;font-size:12px;text-align:center;padding:20px 0">Informe o intervalo de datas para listar autorizações.</p></div>
+    <div id="imp-erros" class="alert alert-err" style="display:none"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-import-aut')">Cancelar</button>
+      <button class="btn btn-warn" onclick="confirmarImport()">✓ Gerar Abastecimentos Selecionados</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Modal Editar KM -->
+<div class="modal-bg" id="modal-edit-km">
+<div class="modal" style="max-width:420px">
+  <div class="modal-header"><h3>Editar KM do Abastecimento</h3><button class="modal-close" onclick="closeModal('modal-edit-km')">✕</button></div>
+  <div class="modal-body">
+    <div id="ekm-info" style="background:#F5F8FC;border-radius:6px;padding:8px 10px;margin-bottom:12px;font-size:11px;color:#637085"></div>
+    <div class="form-grid">
+      <div class="form-group"><label>KM Inicial</label><input id="ekm-ini" type="number" min="0"></div>
+      <div class="form-group"><label>KM Final</label><input id="ekm-fin" type="number" min="0"></div>
+    </div>
+    <div id="ekm-erros" class="alert alert-err" style="display:none"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-edit-km')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveEditKm()">Salvar KM</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Modal Editar Autorização -->
+<div class="modal-bg" id="modal-edit-aut">
+<div class="modal">
+  <div class="modal-header"><h3>Editar Autorização</h3><button class="modal-close" onclick="closeModal('modal-edit-aut')">✕</button></div>
+  <div class="modal-body">
+    <div class="auth-num"><label>Nº da Autorização</label><strong id="edit-aut-num-disp">—</strong></div>
+    <div class="alert alert-info" style="margin-bottom:10px;font-size:11px">Apenas autorizações com situação <b>Emitida</b> podem ser editadas.</div>
+    <div class="form-grid">
+      <div class="form-group"><label>Data *</label><input id="ea-data" type="date"></div>
+      <div class="form-group"><label>Responsável *</label><input id="ea-resp"></div>
+    </div>
+    <div class="form-group"><label>Veículo</label><input id="ea-veiculo-info" readonly style="background:#F5F8FC;color:#637085"></div>
+    <div class="form-group"><label>Fornecedor</label><input id="ea-forn-info" readonly style="background:#F5F8FC;color:#637085"></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Combustível</label><input id="ea-comb-info" readonly style="background:#F5F8FC;color:#637085"></div>
+      <div class="form-group"><label>Quantidade (L) * <span id="ea-cap-hint" style="color:#D68A00;font-size:10px"></span></label>
+        <input id="ea-qtd" type="number" step="0.01" oninput="calcEditAutTotal()"></div>
+    </div>
+    <div id="ea-total" style="display:none" class="alert alert-ok"></div>
+    <div class="form-group"><label>Observações</label><input id="ea-obs"></div>
+    <div id="ea-erros" class="alert alert-err" style="display:none"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-edit-aut')">Cancelar</button>
+      <button class="btn btn-success" onclick="saveEditAut()">Salvar</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Modal Editar Qtd Abastecimento -->
+<div class="modal-bg" id="modal-edit-abs-qtd">
+<div class="modal" style="max-width:440px">
+  <div class="modal-header"><h3>Editar Quantidade Abastecida</h3><button class="modal-close" onclick="closeModal('modal-edit-abs-qtd')">✕</button></div>
+  <div class="modal-body">
+    <div id="eaq-info" style="background:#F5F8FC;border-radius:6px;padding:8px 10px;margin-bottom:12px;font-size:11px;color:#637085"></div>
+    <div id="eaq-limite" class="alert alert-info" style="display:none;font-size:11px"></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Quantidade (L) *</label><input id="eaq-qtd" type="number" step="0.01" min="0.01" oninput="calcEditAbsQtdTotal()"></div>
+      <div class="form-group"><label>Valor Unitário (R$/L)</label><input id="eaq-vunit" type="number" step="0.01" readonly style="background:#F5F8FC;color:#637085"></div>
+    </div>
+    <div id="eaq-total" class="alert alert-ok" style="display:none"></div>
+    <div id="eaq-erros" class="alert alert-err" style="display:none"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-edit-abs-qtd')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveEditAbsQtd()">Salvar</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Modal QR Code -->
+<div class="modal-bg" id="modal-qr">
+<div class="modal" style="max-width:380px">
+  <div class="modal-header"><h3>QR Code da Autorização</h3><button class="modal-close" onclick="closeModal('modal-qr')">✕</button></div>
+  <div class="modal-body" style="text-align:center">
+    <div id="qr-info" style="background:#F5F8FC;border-radius:6px;padding:10px;margin-bottom:14px;font-size:12px;text-align:left;line-height:1.6"></div>
+    <div id="qr-img-wrap" style="display:flex;justify-content:center;margin-bottom:12px;min-height:210px;align-items:center">
+      <img id="qr-img" src="" alt="QR Code" style="border:1px solid #D5DDE8;padding:6px;border-radius:8px;max-width:210px">
+    </div>
+    <p style="font-size:10px;color:#637085">Aponte a câmera para verificar a autorização</p>
+  </div>
+</div>
+</div>
+
+<script>
+const IBGE_MUN=[{"c": "2200053", "d": "Acauã"}, {"c": "2200103", "d": "Agricolândia"}, {"c": "2200202", "d": "Água Branca"}, {"c": "2200251", "d": "Alagoinha do Piauí"}, {"c": "2200277", "d": "Alegrete do Piauí"}, {"c": "2200301", "d": "Alto Longá"}, {"c": "2200400", "d": "Altos"}, {"c": "2200459", "d": "Alvorada do Gurguéia"}, {"c": "2200509", "d": "Amarante"}, {"c": "2200608", "d": "Angical do Piauí"}, {"c": "2200707", "d": "Anísio de Abreu"}, {"c": "2200806", "d": "Antônio Almeida"}, {"c": "2200905", "d": "Aroazes"}, {"c": "2200954", "d": "Aroeiras do Itaim"}, {"c": "2201002", "d": "Arraial"}, {"c": "2201051", "d": "Assunção do Piauí"}, {"c": "2201101", "d": "Avelino Lopes"}, {"c": "2201150", "d": "Baixa Grande do Ribeiro"}, {"c": "2201176", "d": "Barra D'Alcântara"}, {"c": "2201200", "d": "Barras"}, {"c": "2201309", "d": "Barreiras do Piauí"}, {"c": "2201408", "d": "Barro Duro"}, {"c": "2201507", "d": "Batalha"}, {"c": "2201556", "d": "Bela Vista do Piauí"}, {"c": "2201572", "d": "Belém do Piauí"}, {"c": "2201606", "d": "Beneditinos"}, {"c": "2201705", "d": "Bertolínia"}, {"c": "2201739", "d": "Betânia do Piauí"}, {"c": "2201770", "d": "Boa Hora"}, {"c": "2201804", "d": "Bocaina"}, {"c": "2201903", "d": "Bom Jesus"}, {"c": "2201919", "d": "Bom Princípio do Piauí"}, {"c": "2201929", "d": "Bonfim do Piauí"}, {"c": "2201945", "d": "Boqueirão do Piauí"}, {"c": "2201960", "d": "Brasileira"}, {"c": "2201988", "d": "Brejo do Piauí"}, {"c": "2202000", "d": "Buriti dos Lopes"}, {"c": "2202026", "d": "Buriti dos Montes"}, {"c": "2202059", "d": "Cabeceiras do Piauí"}, {"c": "2202075", "d": "Cajazeiras do Piauí"}, {"c": "2202083", "d": "Cajueiro da Praia"}, {"c": "2202091", "d": "Caldeirão Grande do Piauí"}, {"c": "2202109", "d": "Campinas do Piauí"}, {"c": "2202117", "d": "Campo Alegre do Fidalgo"}, {"c": "2202133", "d": "Campo Grande do Piauí"}, {"c": "2202174", "d": "Campo Largo do Piauí"}, {"c": "2202208", "d": "Campo Maior"}, {"c": "2202251", "d": "Canavieira"}, {"c": "2202307", "d": "Canto do Buriti"}, {"c": "2202406", "d": "Capitão de Campos"}, {"c": "2202455", "d": "Capitão Gervásio Oliveira"}, {"c": "2202505", "d": "Caracol"}, {"c": "2202539", "d": "Caraúbas do Piauí"}, {"c": "2202554", "d": "Caridade do Piauí"}, {"c": "2202604", "d": "Castelo do Piauí"}, {"c": "2202653", "d": "Caxingó"}, {"c": "2202703", "d": "Cocal"}, {"c": "2202711", "d": "Cocal de Telha"}, {"c": "2202729", "d": "Cocal dos Alves"}, {"c": "2202737", "d": "Coivaras"}, {"c": "2202752", "d": "Colônia do Gurguéia"}, {"c": "2202778", "d": "Colônia do Piauí"}, {"c": "2202802", "d": "Conceição do Canindé"}, {"c": "2202851", "d": "Coronel José Dias"}, {"c": "2202901", "d": "Corrente"}, {"c": "2203008", "d": "Cristalândia do Piauí"}, {"c": "2203107", "d": "Cristino Castro"}, {"c": "2203206", "d": "Curimatá"}, {"c": "2203230", "d": "Currais"}, {"c": "2203271", "d": "Curral Novo do Piauí"}, {"c": "2203255", "d": "Curralinhos"}, {"c": "2203305", "d": "Demerval Lobão"}, {"c": "2203354", "d": "Dirceu Arcoverde"}, {"c": "2203404", "d": "Dom Expedito Lopes"}, {"c": "2203453", "d": "Dom Inocêncio"}, {"c": "2203420", "d": "Domingos Mourão"}, {"c": "2203503", "d": "Elesbão Veloso"}, {"c": "2203602", "d": "Eliseu Martins"}, {"c": "2203701", "d": "Esperantina"}, {"c": "2203750", "d": "Fartura do Piauí"}, {"c": "2203800", "d": "Flores do Piauí"}, {"c": "2203859", "d": "Floresta do Piauí"}, {"c": "2203909", "d": "Floriano"}, {"c": "2204006", "d": "Francinópolis"}, {"c": "2204105", "d": "Francisco Ayres"}, {"c": "2204154", "d": "Francisco Macedo"}, {"c": "2204204", "d": "Francisco Santos"}, {"c": "2204303", "d": "Fronteiras"}, {"c": "2204352", "d": "Geminiano"}, {"c": "2204402", "d": "Gilbués"}, {"c": "2204501", "d": "Guadalupe"}, {"c": "2204550", "d": "Guaribas"}, {"c": "2204600", "d": "Hugo Napoleão"}, {"c": "2204659", "d": "Ilha Grande"}, {"c": "2204709", "d": "Inhuma"}, {"c": "2204808", "d": "Ipiranga do Piauí"}, {"c": "2204907", "d": "Isaías Coelho"}, {"c": "2205003", "d": "Itainópolis"}, {"c": "2205102", "d": "Itaueira"}, {"c": "2205151", "d": "Jacobina do Piauí"}, {"c": "2205201", "d": "Jaicós"}, {"c": "2205250", "d": "Jardim do Mulato"}, {"c": "2205276", "d": "Jatobá do Piauí"}, {"c": "2205300", "d": "Jerumenha"}, {"c": "2205359", "d": "João Costa"}, {"c": "2205409", "d": "Joaquim Pires"}, {"c": "2205458", "d": "Joca Marques"}, {"c": "2205508", "d": "José de Freitas"}, {"c": "2205516", "d": "Juazeiro do Piauí"}, {"c": "2205524", "d": "Júlio Borges"}, {"c": "2205532", "d": "Jurema"}, {"c": "2205557", "d": "Lagoa Alegre"}, {"c": "2205573", "d": "Lagoa de São Francisco"}, {"c": "2205565", "d": "Lagoa do Barro do Piauí"}, {"c": "2205581", "d": "Lagoa do Piauí"}, {"c": "2205599", "d": "Lagoa do Sítio"}, {"c": "2205540", "d": "Lagoinha do Piauí"}, {"c": "2205607", "d": "Landri Sales"}, {"c": "2205706", "d": "Luís Correia"}, {"c": "2205805", "d": "Luzilândia"}, {"c": "2205854", "d": "Madeiro"}, {"c": "2205904", "d": "Manoel Emídio"}, {"c": "2205953", "d": "Marcolândia"}, {"c": "2206001", "d": "Marcos Parente"}, {"c": "2206050", "d": "Massapê do Piauí"}, {"c": "2206100", "d": "Matias Olímpio"}, {"c": "2206209", "d": "Miguel Alves"}, {"c": "2206308", "d": "Miguel Leão"}, {"c": "2206357", "d": "Milton Brandão"}, {"c": "2206407", "d": "Monsenhor Gil"}, {"c": "2206506", "d": "Monsenhor Hipólito"}, {"c": "2206605", "d": "Monte Alegre do Piauí"}, {"c": "2206654", "d": "Morro Cabeça no Tempo"}, {"c": "2206670", "d": "Morro do Chapéu do Piauí"}, {"c": "2206696", "d": "Murici dos Portelas"}, {"c": "2206704", "d": "Nazaré do Piauí"}, {"c": "2206720", "d": "Nazária"}, {"c": "2206753", "d": "Nossa Senhora de Nazaré"}, {"c": "2206803", "d": "Nossa Senhora dos Remédios"}, {"c": "2207959", "d": "Nova Santa Rita"}, {"c": "2206902", "d": "Novo Oriente do Piauí"}, {"c": "2206951", "d": "Novo Santo Antônio"}, {"c": "2207009", "d": "Oeiras"}, {"c": "2207108", "d": "Olho D'Água do Piauí"}, {"c": "2207207", "d": "Padre Marcos"}, {"c": "2207306", "d": "Paes Landim"}, {"c": "2207355", "d": "Pajeú do Piauí"}, {"c": "2207405", "d": "Palmeira do Piauí"}, {"c": "2207504", "d": "Palmeirais"}, {"c": "2207553", "d": "Paquetá"}, {"c": "2207603", "d": "Parnaguá"}, {"c": "2207702", "d": "Parnaíba"}, {"c": "2207751", "d": "Passagem Franca do Piauí"}, {"c": "2207777", "d": "Patos do Piauí"}, {"c": "2207793", "d": "Pau D'Arco do Piauí"}, {"c": "2207801", "d": "Paulistana"}, {"c": "2207850", "d": "Pavussu"}, {"c": "2207900", "d": "Pedro II"}, {"c": "2207934", "d": "Pedro Laurentino"}, {"c": "2208007", "d": "Picos"}, {"c": "2208106", "d": "Pimenteiras"}, {"c": "2208205", "d": "Pio IX"}, {"c": "2208304", "d": "Piracuruca"}, {"c": "2208403", "d": "Piripiri"}, {"c": "2208502", "d": "Porto"}, {"c": "2208551", "d": "Porto Alegre do Piauí"}, {"c": "2208601", "d": "Prata do Piauí"}, {"c": "2208650", "d": "Queimada Nova"}, {"c": "2208700", "d": "Redenção do Gurguéia"}, {"c": "2208809", "d": "Regeneração"}, {"c": "2208858", "d": "Riacho Frio"}, {"c": "2208874", "d": "Ribeira do Piauí"}, {"c": "2208908", "d": "Ribeiro Gonçalves"}, {"c": "2209005", "d": "Rio Grande do Piauí"}, {"c": "2209104", "d": "Santa Cruz do Piauí"}, {"c": "2209153", "d": "Santa Cruz dos Milagres"}, {"c": "2209203", "d": "Santa Filomena"}, {"c": "2209302", "d": "Santa Luz"}, {"c": "2209377", "d": "Santa Rosa do Piauí"}, {"c": "2209351", "d": "Santana do Piauí"}, {"c": "2209401", "d": "Santo Antônio de Lisboa"}, {"c": "2209450", "d": "Santo Antônio dos Milagres"}, {"c": "2209500", "d": "Santo Inácio do Piauí"}, {"c": "2209559", "d": "São Braz do Piauí"}, {"c": "2209609", "d": "São Félix do Piauí"}, {"c": "2209658", "d": "São Francisco de Assis do Piauí"}, {"c": "2209708", "d": "São Francisco do Piauí"}, {"c": "2209757", "d": "São Gonçalo do Gurguéia"}, {"c": "2209807", "d": "São Gonçalo do Piauí"}, {"c": "2209856", "d": "São João da Canabrava"}, {"c": "2209872", "d": "São João da Fronteira"}, {"c": "2209906", "d": "São João da Serra"}, {"c": "2209955", "d": "São João da Varjota"}, {"c": "2209971", "d": "São João do Arraial"}, {"c": "2210003", "d": "São João do Piauí"}, {"c": "2210052", "d": "São José do Divino"}, {"c": "2210102", "d": "São José do Peixe"}, {"c": "2210201", "d": "São José do Piauí"}, {"c": "2210300", "d": "São Julião"}, {"c": "2210359", "d": "São Lourenço do Piauí"}, {"c": "2210375", "d": "São Luis do Piauí"}, {"c": "2210383", "d": "São Miguel da Baixa Grande"}, {"c": "2210391", "d": "São Miguel do Fidalgo"}, {"c": "2210409", "d": "São Miguel do Tapuio"}, {"c": "2210508", "d": "São Pedro do Piauí"}, {"c": "2210607", "d": "São Raimundo Nonato"}, {"c": "2210623", "d": "Sebastião Barros"}, {"c": "2210631", "d": "Sebastião Leal"}, {"c": "2210656", "d": "Sigefredo Pacheco"}, {"c": "2210706", "d": "Simões"}, {"c": "2210805", "d": "Simplício Mendes"}, {"c": "2210904", "d": "Socorro do Piauí"}, {"c": "2210938", "d": "Sussuapara"}, {"c": "2210953", "d": "Tamboril do Piauí"}, {"c": "2210979", "d": "Tanque do Piauí"}, {"c": "2211001", "d": "Teresina"}, {"c": "2211100", "d": "União"}, {"c": "2211209", "d": "Uruçuí"}, {"c": "2211308", "d": "Valença do Piauí"}, {"c": "2211357", "d": "Várzea Branca"}, {"c": "2211407", "d": "Várzea Grande"}, {"c": "2211506", "d": "Vera Mendes"}, {"c": "2211605", "d": "Vila Nova do Piauí"}, {"c": "2211704", "d": "Wall Ferraz"}];
+
+// ══ LOGIN ════════════════════════════════════════════════════
+// Usuários: carregados do localStorage, com fallback para defaults
+const DEFAULT_USERS=[
+  {id:'u1',login:'admin',senha:'admin123',role:'admin',nome:'Administrador',dtInicio:'',dtFim:''},
+  {id:'u2',login:'usuario',senha:'usuario123',role:'usuario',nome:'Usuário',dtInicio:'',dtFim:''},
+  {id:'u3',login:'fornecedor',senha:'fornecedor123',role:'fornecedor',nome:'Fornecedor',dtInicio:'',dtFim:''}
+];
+let USERS=ld('fr_users',DEFAULT_USERS);
+const ROLE_PAGES={
+  admin:['dashboard','entidade','usuarios','secretarias','veiculos','fornecedores','autorizacoes','abastecimentos','relatorios','exportacao'],
+  usuario:['dashboard','autorizacoes','abastecimentos','relatorios','exportacao'],
+  fornecedor:['autorizacoes']
+};
+let currentUser=null;
+
+function doLogin(){
+  try{
+    const u=document.getElementById('lg-user').value.trim();
+    const p=document.getElementById('lg-pass').value;
+    const found=USERS.find(x=>x.login===u&&x.senha===p);
+    if(!found){document.getElementById('login-err').textContent='Usuário ou senha incorretos.';return;}
+    // Validação de período de acesso
+    const hoje=new Date().toISOString().slice(0,10);
+    if(found.dtInicio&&hoje<found.dtInicio){
+      document.getElementById('login-err').textContent='Acesso liberado somente a partir de '+fmtDt(found.dtInicio)+'.';
+      return;
+    }
+    if(found.dtFim&&hoje>found.dtFim){
+      document.getElementById('login-err').textContent='Período de acesso encerrado em '+fmtDt(found.dtFim)+'.';
+      return;
+    }
+    currentUser=found;
+    document.getElementById('login-err').textContent='';
+    document.getElementById('login-screen').style.display='none';
+    document.getElementById('sb-user-lbl').textContent=found.nome+' ('+found.role+')';
+    applyRoleNav(found.role);
+    if(found.role==='fornecedor')document.getElementById('btn-nova-aut').style.display='none';
+    try{renderDashboard();}catch(e){console.warn('Dashboard:',e);}
+    try{populateIBGE();}catch(e){console.warn('IBGE:',e);}
+    try{atualizarSidebarEntidade();}catch(e){console.warn('Sidebar:',e);}
+    try{const b=ld('fr_brasao','');if(b)applyBrasao(b);}catch(e){}
+  }catch(e){
+    document.getElementById('login-err').textContent='Erro ao entrar: '+e.message;
+  }
+}
+function doLogout(){
+  currentUser=null;
+  document.getElementById('login-screen').style.display='flex';
+  document.getElementById('lg-user').value='';document.getElementById('lg-pass').value='';
+  document.getElementById('login-err').textContent='';
+}
+function applyRoleNav(role){
+  document.querySelectorAll('#sb-nav .nav-btn').forEach(btn=>{
+    const roles=(btn.dataset.roles||'').split(',');
+    btn.classList.toggle('nav-hidden',!roles.includes(role));
+  });
+  document.querySelectorAll('#sb-nav .nav-sep').forEach(sep=>{
+    const roles=(sep.dataset.sepRoles||sep.getAttribute('data-sep-roles')||'').split(',');
+    sep.style.display=roles.includes(role)?'':'none';
+  });
+}
+
+// ══ CONSTANTES ═══════════════════════════════════════════════
+const TV=[{c:'1',d:'Automóvel'},{c:'2',d:'Caminhão'},{c:'3',d:'Caminhonete'},{c:'4',d:'Motocicleta'},{c:'5',d:'Ônibus'},{c:'6',d:'Micro-ônibus'},{c:'7',d:'Trator'},{c:'8',d:'Van/Minivan'},{c:'9',d:'Ambulância'},{c:'99',d:'Outros'}];
+const TC=[{c:'1',d:'Gasolina'},{c:'2',d:'Diesel'},{c:'3',d:'Etanol'},{c:'4',d:'GNV'},{c:'5',d:'Flex (Gasolina/Etanol)'},{c:'6',d:'Elétrico'}];
+const OR=[{c:'1',d:'Próprio'},{c:'2',d:'Cedido'},{c:'3',d:'Locado'},{c:'4',d:'Sublocado'}];
+const getTVD=c=>TV.find(x=>x.c===c)?.d||c;
+const getCombD=c=>TC.find(x=>x.c===c)?.d||c;
+const getOrigD=c=>OR.find(x=>x.c===c)?.d||c;
+const fmtN=(n,d=2)=>Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});
+const fmtR=n=>'R$ '+fmtN(n);
+const fmtDt=s=>s?new Date(s+'T00:00').toLocaleDateString('pt-BR'):'';
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2);
+
+// ══ DADOS INICIAIS ════════════════════════════════════════════
+const I_SEC=[
+  {id:'s1',nome:'Secretaria Municipal de Saúde',sigla:'SMS',resp:'João Silva',tel:'(89)3456-7890',email:'saude@municipio.pi.gov.br',cc:'02.001'},
+  {id:'s2',nome:'Secretaria Municipal de Educação',sigla:'SME',resp:'Maria Santos',tel:'(89)3456-7891',email:'educacao@municipio.pi.gov.br',cc:'03.001'},
+  {id:'s3',nome:'Secretaria Municipal de Administração',sigla:'SMA',resp:'Pedro Oliveira',tel:'(89)3456-7892',email:'adm@municipio.pi.gov.br',cc:'01.001'},
+  {id:'s4',nome:'Fundo Municipal de Assistência Social',sigla:'FMAS',resp:'Ana Costa',tel:'(89)3456-7893',email:'fmas@municipio.pi.gov.br',cc:'05.001'},
+  {id:'s5',nome:'Gabinete do Prefeito',sigla:'GAB',resp:'Carlos Souza',tel:'(89)3456-7894',email:'gabinete@municipio.pi.gov.br',cc:'01.000'}
+];
+// saldos: { combCode: { contrato: litros_total, atual: saldo_disponivel } } — 0 = ilimitado
+const I_FOR=[
+  {id:'f1',razao:'Auto Posto São Raimundo Ltda',fantasia:'Posto São Raimundo',cnpj:'12.345.678/0001-90',end:'Av. Principal, 100',cidade:'São Raimundo Nonato',tel:'(89)3456-1234',resp:'José Ferreira',combs:['1','2','3','5'],precos:{'1':6.19,'2':6.49,'3':4.89,'5':6.19},saldos:{'1':{contrato:5000,atual:4807.5},'2':{contrato:10000,atual:9875},'3':{contrato:2000,atual:2000},'5':{contrato:5000,atual:4924.5}}},
+  {id:'f2',razao:'Distribuidora Serra da Capivara Ltda',fantasia:'Posto Serra',cnpj:'98.765.432/0001-10',end:'Rua das Flores, 250',cidade:'São Raimundo Nonato',tel:'(89)3456-5678',resp:'Antônia Lima',combs:['2','4'],precos:{'2':6.45,'4':4.20},saldos:{'2':{contrato:8000,atual:7850},'4':{contrato:1000,atual:1000}}}
+];
+const I_VEI=[
+  {id:'v1',codigo:'VEI-001',placa:'PIE-1234',renavam:'12345678901',chassi:'9BWZZZ377VT004251',modelo:'Strada CS 1.4',marca:'Fiat',anoFab:2020,anoMod:2020,tipo:'3',sit:'Bom',comb:'5',cap:48,km:45580,sec:'SMS',orig:'1',dtAq:'2020-03-15',cpfcnpj:'',locador:'',valmensal:0,motorista:'0',cw:'',orgaodest:'',dtinices:'',dtfimces:'',obs:''},
+  {id:'v2',codigo:'VEI-002',placa:'PIE-5678',renavam:'23456789012',chassi:'9BWZZZ377VT004252',modelo:'Sprinter CDI 415',marca:'Mercedes-Benz',anoFab:2019,anoMod:2019,tipo:'9',sit:'Bom',comb:'2',cap:85,km:79320,sec:'SMS',orig:'1',dtAq:'2019-06-20',cpfcnpj:'',locador:'',valmensal:0,motorista:'0',cw:'',orgaodest:'',dtinices:'',dtfimces:'',obs:'Ambulância UTI'},
+  {id:'v3',codigo:'VEI-003',placa:'PIE-9012',renavam:'34567890123',chassi:'9BWZZZ377VT004253',modelo:'OF-1721/59',marca:'Mercedes-Benz',anoFab:2018,anoMod:2018,tipo:'5',sit:'Regular',comb:'2',cap:120,km:125600,sec:'SME',orig:'1',dtAq:'2018-02-10',cpfcnpj:'',locador:'',valmensal:0,motorista:'0',cw:'',orgaodest:'',dtinices:'',dtfimces:'',obs:'Transp. Escolar'},
+  {id:'v4',codigo:'VEI-004',placa:'PIE-3456',renavam:'45678901234',chassi:'9BWZZZ377VT004254',modelo:'Ranger XLT 3.2',marca:'Ford',anoFab:2022,anoMod:2022,tipo:'3',sit:'Ótimo',comb:'2',cap:80,km:12340,sec:'GAB',orig:'3',dtAq:'2022-01-10',cpfcnpj:'01234567000134',locador:'Locadora Nordeste',valmensal:3200,motorista:'0',cw:'CW-123456/24',orgaodest:'',dtinices:'',dtfimces:'',obs:''},
+  {id:'v5',codigo:'VEI-005',placa:'PIE-7890',renavam:'56789012345',chassi:'9BWZZZ377VT004255',modelo:'CG 160 Fan',marca:'Honda',anoFab:2021,anoMod:2021,tipo:'4',sit:'Bom',comb:'1',cap:13,km:34500,sec:'SMA',orig:'1',dtAq:'2021-09-05',cpfcnpj:'',locador:'',valmensal:0,motorista:'0',cw:'',orgaodest:'',dtinices:'',dtfimces:'',obs:''}
+];
+const I_ABS=[
+  {id:'a1',dt:'2026-05-01',vId:'v1',pl:'PIE-1234',sec:'SMS',fId:'f1',comb:'5',qtd:35.5,vUnit:6.19,kmI:45000,kmF:45230,resp:'João Silva',autId:null,obs:''},
+  {id:'a2',dt:'2026-05-03',vId:'v2',pl:'PIE-5678',sec:'SMS',fId:'f1',comb:'2',qtd:60,vUnit:6.49,kmI:78600,kmF:78900,resp:'João Silva',autId:null,obs:''},
+  {id:'a3',dt:'2026-05-05',vId:'v3',pl:'PIE-9012',sec:'SME',fId:'f2',comb:'2',qtd:80,vUnit:6.45,kmI:125200,kmF:125600,resp:'Maria Santos',autId:null,obs:''},
+  {id:'a4',dt:'2026-05-10',vId:'v4',pl:'PIE-3456',sec:'GAB',fId:'f1',comb:'2',qtd:65,vUnit:6.49,kmI:12100,kmF:12340,resp:'Carlos Souza',autId:null,obs:''},
+  {id:'a5',dt:'2026-05-12',vId:'v5',pl:'PIE-7890',sec:'SMA',fId:'f1',comb:'1',qtd:12,vUnit:6.19,kmI:34400,kmF:34500,resp:'Pedro Oliveira',autId:null,obs:''},
+  {id:'a6',dt:'2026-05-15',vId:'v1',pl:'PIE-1234',sec:'SMS',fId:'f1',comb:'5',qtd:40,vUnit:6.19,kmI:45230,kmF:45580,resp:'João Silva',autId:null,obs:''},
+  {id:'a7',dt:'2026-05-20',vId:'v2',pl:'PIE-5678',sec:'SMS',fId:'f2',comb:'2',qtd:70,vUnit:6.45,kmI:78900,kmF:79320,resp:'João Silva',autId:null,obs:''}
+];
+
+// ══ STATE ═════════════════════════════════════════════════════
+function ld(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch{return d;}}
+function sv(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
+let sec=ld('fr_sec',I_SEC),forn=ld('fr_for',I_FOR),veic=ld('fr_veic',I_VEI),abs=ld('fr_abs',I_ABS),aut=ld('fr_aut',[]);
+let editId=null;
+function persist(){sv('fr_sec',sec);sv('fr_for',forn);sv('fr_veic',veic);sv('fr_abs',abs);sv('fr_aut',aut);}
+
+// ══ HELPERS ═══════════════════════════════════════════════════
+const origSt={'1':['#1A8A4A','#E6F4EC'],'2':['#0F9D8B','#E2F5F2'],'3':['#D68A00','#FFF3DC'],'4':['#C0392B','#FDECEC']};
+const bdg=(t,c,b)=>`<span class="badge" style="background:${b};color:${c}">${t}</span>`;
+function gerarNumAut(dataStr){
+  const d=dataStr?new Date(dataStr+'T00:00'):new Date();
+  const ds=d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');
+  const n=aut.filter(a=>a.numero&&a.numero.startsWith(ds)).length+1;
+  return `${ds}-${String(n).padStart(3,'0')}`;
+}
+function getCfg(id){return document.getElementById(id)?.value||'';}
+
+// ══ SALDO DE COMBUSTÍVEL ══════════════════════════════════════
+function debitarSaldo(fornId,comb,qtd){
+  forn=forn.map(f=>{
+    if(f.id!==fornId)return f;
+    const s={...(f.saldos||{})};
+    if(s[comb]&&Number(s[comb].contrato)>0)s[comb]={...s[comb],atual:Math.max(0,Number(s[comb].atual)-qtd)};
+    return{...f,saldos:s};
+  });
+}
+function restaurarSaldo(fornId,comb,qtd){
+  forn=forn.map(f=>{
+    if(f.id!==fornId)return f;
+    const s={...(f.saldos||{})};
+    if(s[comb]&&Number(s[comb].contrato)>0)s[comb]={...s[comb],atual:Math.min(Number(s[comb].contrato),Number(s[comb].atual)+qtd)};
+    return{...f,saldos:s};
+  });
+}
+
+// ══ NAV ═══════════════════════════════════════════════════════
+function showPage(id,btn){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('page-'+id).classList.add('active');
+  if(btn)btn.classList.add('active');
+  const fn={dashboard:renderDashboard,entidade:()=>{},usuarios:renderUsers,secretarias:renderSec,veiculos:renderVeiculos,fornecedores:renderFor,autorizacoes:renderAut,abastecimentos:renderAbastecimentos,exportacao:()=>{},relatorios:renderRelatorios};
+  fn[id]?.();
+}
+function closeModal(id){document.getElementById(id).classList.remove('open');}
+
+// ══ DASHBOARD ═════════════════════════════════════════════════
+let chSec=null,chComb=null,chGasto=null;
+function renderDashboard(){
+  const tLit=abs.reduce((s,a)=>s+a.qtd,0),tGasto=abs.reduce((s,a)=>s+a.qtd*a.vUnit,0);
+  document.getElementById('kpi-veic').textContent=veic.length;
+  document.getElementById('kpi-abs').textContent=abs.length;
+  document.getElementById('kpi-lit').textContent=fmtN(tLit,0)+' L';
+  document.getElementById('kpi-gasto').textContent=fmtR(tGasto);
+  const pSec=sec.map(s=>{const a=abs.filter(x=>x.sec===s.sigla);return{n:s.sigla,l:a.reduce((t,x)=>t+x.qtd,0),g:a.reduce((t,x)=>t+x.qtd*x.vUnit,0)};}).filter(x=>x.l>0);
+  const pComb=TC.map(c=>{const l=abs.filter(x=>x.comb===c.c).reduce((t,x)=>t+x.qtd,0);return{n:c.d,l};}).filter(x=>x.l>0);
+  const CL=['#1B55A8','#2E76D4','#F5A623','#27AE60','#C0392B','#0F9D8B'];
+  if(chSec)chSec.destroy();
+  chSec=new Chart(document.getElementById('chart-sec'),{type:'bar',data:{labels:pSec.map(x=>x.n),datasets:[{data:pSec.map(x=>x.l),backgroundColor:'#1B55A8',borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>fmtN(v,0)}}}}});
+  if(chComb)chComb.destroy();
+  chComb=new Chart(document.getElementById('chart-comb'),{type:'doughnut',data:{labels:pComb.map(x=>x.n),datasets:[{data:pComb.map(x=>x.l),backgroundColor:CL}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{font:{size:10}}}}}});
+  if(chGasto)chGasto.destroy();
+  chGasto=new Chart(document.getElementById('chart-gasto'),{type:'bar',data:{labels:pSec.map(x=>x.n),datasets:[{data:pSec.map(x=>x.g),backgroundColor:'#F5A623',borderRadius:3}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{callback:v=>'R$'+fmtN(v,0)}}}}});
+}
+
+// ══ VEÍCULOS ══════════════════════════════════════════════════
+function renderVeiculos(){
+  const s=document.getElementById('fv-search').value.toLowerCase();
+  const fSec=document.getElementById('fv-sec').value,fComb=document.getElementById('fv-comb').value,fOr=document.getElementById('fv-orig').value;
+  const ss=document.getElementById('fv-sec');if(ss.options.length<2)ss.innerHTML='<option value="">Todas Secretarias</option>'+sec.map(x=>`<option value="${x.sigla}">${x.sigla}</option>`).join('');
+  const sc=document.getElementById('fv-comb');if(sc.options.length<2)sc.innerHTML='<option value="">Todos Combustíveis</option>'+TC.map(x=>`<option value="${x.c}">${x.d}</option>`).join('');
+  const so=document.getElementById('fv-orig');if(so.options.length<2)so.innerHTML='<option value="">Todas Origens</option>'+OR.map(x=>`<option value="${x.c}">${x.d}</option>`).join('');
+  const list=veic.filter(v=>{
+    if(fSec&&v.sec!==fSec)return false;if(fComb&&v.comb!==fComb)return false;if(fOr&&v.orig!==fOr)return false;
+    if(s&&!(v.placa+v.modelo+v.sec).toLowerCase().includes(s))return false;return true;
+  });
+  document.getElementById('veic-count').textContent=list.length+' veículo(s)';
+  document.querySelector('#tbl-veiculos tbody').innerHTML=list.map(v=>{
+    const[oc,ob]=origSt[v.orig]||['#637085','#F5F5F5'];
+    return`<tr><td style="color:#1B55A8;font-weight:500">${v.codigo}</td><td><strong>${v.placa}</strong></td><td>${v.modelo}<br><small style="color:#637085">${v.marca}</small></td><td>${v.anoFab}/${v.anoMod}</td><td style="font-size:11px">${getTVD(v.tipo)}</td><td>${getCombD(v.comb)}</td><td>${bdg(getOrigD(v.orig),oc,ob)}</td><td>${bdg(v.sec,'#1B55A8','#EBF2FC')}</td><td>${Number(v.km).toLocaleString('pt-BR')} km</td><td>${v.sit}</td><td><button class="ic-btn" onclick="openVeiculoModal('${v.id}')">✏️</button><button class="ic-btn" onclick="delVeic('${v.id}')">🗑️</button></td></tr>`;
+  }).join('');
+}
+function openVeiculoModal(id){
+  editId=id||null;
+  document.getElementById('mveic-title').textContent=id?'Editar Veículo':'Novo Veículo';
+  document.getElementById('v-tipo').innerHTML=TV.map(t=>`<option value="${t.c}">${t.d}</option>`).join('');
+  document.getElementById('v-comb').innerHTML=TC.map(c=>`<option value="${c.c}">${c.d}</option>`).join('');
+  document.getElementById('v-origem').innerHTML=OR.map(o=>`<option value="${o.c}">${o.d}</option>`).join('');
+  document.getElementById('v-sec').innerHTML=sec.map(s=>`<option value="${s.sigla}">${s.sigla} — ${s.nome}</option>`).join('');
+  const flds=['codigo','placa','renavam','chassi','modelo','marca','obs','cpfcnpj','locador','cw','orgaodest'];
+  if(id){
+    const v=veic.find(x=>x.id===id);
+    flds.forEach(f=>document.getElementById('v-'+f).value=v[f]||'');
+    ['anofab','anomod','cap','km'].forEach(f=>{const el=document.getElementById('v-'+f);if(el)el.value=v[{anofab:'anoFab',anomod:'anoMod',cap:'cap',km:'km'}[f]]||0;});
+    document.getElementById('v-tipo').value=v.tipo;document.getElementById('v-comb').value=v.comb;
+    document.getElementById('v-origem').value=v.orig;document.getElementById('v-sec').value=v.sec;
+    document.getElementById('v-sit').value=v.sit;document.getElementById('v-dtaq').value=v.dtAq||'';
+    document.getElementById('v-valmensal').value=v.valmensal||0;document.getElementById('v-motorista').value=v.motorista||'0';
+    document.getElementById('v-dtinices').value=v.dtinices||'';document.getElementById('v-dtfimces').value=v.dtfimces||'';
+  } else {
+    flds.forEach(f=>document.getElementById('v-'+f).value='');
+    document.getElementById('v-anofab').value=new Date().getFullYear();document.getElementById('v-anomod').value=new Date().getFullYear();
+    document.getElementById('v-cap').value=50;document.getElementById('v-km').value=0;
+    document.getElementById('v-valmensal').value=0;document.getElementById('v-motorista').value='0';
+    document.getElementById('v-codigo').value='VEI-'+String(veic.length+1).padStart(3,'0');
+  }
+  document.getElementById('v-erros').style.display='none';
+  updateVeicFields();
+  document.getElementById('modal-veiculo').classList.add('open');
+}
+function updateVeicFields(){const o=document.getElementById('v-origem').value;document.getElementById('campos-locado').style.display=(o==='3'||o==='4')?'block':'none';document.getElementById('campos-cedido').style.display=o==='2'?'block':'none';}
+function delVeic(id){if(confirm('Excluir veículo?')){veic=veic.filter(x=>x.id!==id);persist();renderVeiculos();}}
+function saveVeiculo(){
+  const errs=[];const ano=new Date().getFullYear();
+  const af=Number(document.getElementById('v-anofab').value),am=Number(document.getElementById('v-anomod').value);
+  const tp=document.getElementById('v-tipo').value,pl=document.getElementById('v-placa').value,rv=document.getElementById('v-renavam').value;
+  if(!pl)errs.push('Placa obrigatória');if(!document.getElementById('v-modelo').value)errs.push('Modelo obrigatório');if(!rv)errs.push('RENAVAM obrigatório');
+  if(tp!=='99'){if(af>am)errs.push('Ano Fabricação > Ano Modelo');if(af>ano)errs.push('Ano Fabricação > ano atual');if(am>ano+1)errs.push('Ano Modelo > ano atual+1');}
+  else{if(rv!=='99999999999')errs.push('RENAVAM deve ser 99999999999');if(!pl.startsWith('XYZ'))errs.push('Placa deve iniciar com XYZ');}
+  const orig=document.getElementById('v-origem').value;
+  if((orig==='3'||orig==='4')&&!document.getElementById('v-locador').value)errs.push('Nome do Locador obrigatório');
+  const dtI=document.getElementById('v-dtinices').value,dtF=document.getElementById('v-dtfimces').value;
+  if(orig==='2'&&dtI&&dtF&&dtF<dtI)errs.push('Data Fim Cessão anterior à Data Início');
+  if(errs.length){const el=document.getElementById('v-erros');el.innerHTML='⚠️ '+errs.join('<br>⚠️ ');el.style.display='block';return;}
+  const obj={id:editId||uid(),codigo:document.getElementById('v-codigo').value,placa:pl,renavam:rv,chassi:document.getElementById('v-chassi').value,modelo:document.getElementById('v-modelo').value,marca:document.getElementById('v-marca').value,anoFab:af,anoMod:am,tipo:tp,sit:document.getElementById('v-sit').value,comb:document.getElementById('v-comb').value,cap:Number(document.getElementById('v-cap').value),km:Number(document.getElementById('v-km').value),sec:document.getElementById('v-sec').value,orig,dtAq:document.getElementById('v-dtaq').value,cpfcnpj:document.getElementById('v-cpfcnpj').value,locador:document.getElementById('v-locador').value,valmensal:Number(document.getElementById('v-valmensal').value),motorista:document.getElementById('v-motorista').value,cw:document.getElementById('v-cw').value,orgaodest:document.getElementById('v-orgaodest').value,dtinices:dtI,dtfimces:dtF,obs:document.getElementById('v-obs').value};
+  if(editId)veic=veic.map(x=>x.id===editId?obj:x);else veic=[...veic,obj];
+  persist();closeModal('modal-veiculo');renderVeiculos();
+}
+
+// ══ SECRETARIAS ═══════════════════════════════════════════════
+function renderSec(){
+  document.getElementById('sec-cards').innerHTML=sec.map(s=>`<div class="card" style="margin-bottom:0"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px"><div><span class="badge" style="background:#EBF2FC;color:#1B55A8;font-size:13px;font-weight:700;padding:3px 9px;border-radius:8px;display:inline-block;margin-bottom:4px">${s.sigla}</span><p style="font-weight:500;font-size:13px">${s.nome}</p></div><div><button class="ic-btn" onclick="editSec('${s.id}')">✏️</button><button class="ic-btn" onclick="delSec('${s.id}')">🗑️</button></div></div><div style="font-size:11px;color:#637085;display:grid;grid-template-columns:1fr 1fr;gap:3px"><span>👤 ${s.resp}</span><span>📞 ${s.tel}</span><span style="grid-column:1/-1">✉️ ${s.email}</span><span>💼 CC: ${s.cc}</span></div></div>`).join('');
+}
+function openSecModal(){editId=null;['nome','sigla','resp','tel','email','cc'].forEach(f=>document.getElementById('s-'+f).value='');document.getElementById('msec-title').textContent='Nova Secretaria';document.getElementById('modal-sec').classList.add('open');}
+function editSec(id){editId=id;const s=sec.find(x=>x.id===id);['nome','sigla','resp','tel','email','cc'].forEach(f=>document.getElementById('s-'+f).value=s[f]||'');document.getElementById('msec-title').textContent='Editar Secretaria';document.getElementById('modal-sec').classList.add('open');}
+function delSec(id){if(confirm('Excluir secretaria?')){sec=sec.filter(x=>x.id!==id);persist();renderSec();}}
+function saveSec(){
+  const nome=document.getElementById('s-nome').value,sigla=document.getElementById('s-sigla').value;
+  if(!nome||!sigla){alert('Nome e Sigla obrigatórios');return;}
+  const obj={id:editId||uid(),nome,sigla,resp:document.getElementById('s-resp').value,tel:document.getElementById('s-tel').value,email:document.getElementById('s-email').value,cc:document.getElementById('s-cc').value};
+  if(editId)sec=sec.map(x=>x.id===editId?obj:x);else sec=[...sec,obj];
+  persist();closeModal('modal-sec');renderSec();
+}
+
+// ══ FORNECEDORES ══════════════════════════════════════════════
+function renderFor(){
+  document.getElementById('for-cards').innerHTML=forn.map(f=>{
+    const saldoHtml=(f.combs||[]).map(c=>{
+      const s=f.saldos?.[c];const pr=f.precos?.[c]||0;const ilim=!s||Number(s.contrato)===0;
+      const pct=ilim?100:Math.max(0,Math.round(Number(s.atual)/Number(s.contrato)*100));
+      const cor=pct>50?'#1A8A4A':pct>20?'#D68A00':'#C0392B';
+      return`<div style="margin-bottom:7px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+          <span class="badge" style="background:#EBF2FC;color:#1B55A8">${getCombD(c)}: R$${fmtN(pr)}/L</span>
+          <span style="font-size:10px;color:${ilim?'#637085':cor};font-weight:600">${ilim?'Ilimitado':fmtN(Number(s.atual),0)+' / '+fmtN(Number(s.contrato),0)+' L'}</span>
+        </div>
+        ${!ilim?`<div class="saldo-bar"><div class="saldo-fill" style="width:${pct}%;background:${cor}"></div></div>`:''}
+      </div>`;
+    }).join('');
+    return`<div class="card" style="margin-bottom:0"><div style="display:flex;gap:8px"><div style="flex:1"><p style="font-weight:600;font-size:13px;margin-bottom:2px">⛽ ${f.fantasia}</p><p style="font-size:11px;color:#637085;margin-bottom:6px">${f.razao} · CNPJ: ${f.cnpj}</p><p style="font-size:11px;color:#637085;margin-bottom:8px">📍 ${f.end}, ${f.cidade}</p>${saldoHtml}</div><div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0"><button class="ic-btn" onclick="editFor('${f.id}')">✏️</button><button class="ic-btn" title="Atualizar saldo" onclick="openSaldoModal('${f.id}')">📊</button><button class="ic-btn" onclick="delFor('${f.id}')">🗑️</button></div></div></div>`;
+  }).join('');
+}
+function renderForCombs(sel,pr,saldos){
+  document.getElementById('for-combs').innerHTML=TC.map(c=>{
+    const chk=sel.includes(c.c);const s=saldos?.[c.c]||{contrato:0,atual:0};
+    return`<div style="border:1px solid #EFF3F9;border-radius:6px;padding:8px;margin-bottom:6px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:${chk?'8':'0'}px">
+        <input type="checkbox" id="fc-${c.c}" ${chk?'checked':''} onchange="toggleFP('${c.c}')">
+        <label for="fc-${c.c}" style="font-size:12px;font-weight:500;cursor:pointer">${c.d}</label>
+      </div>
+      <div id="fp-fields-${c.c}" style="display:${chk?'grid':'none'};grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div><label style="font-size:10px;color:#637085;display:block;margin-bottom:2px">Preço (R$/L)</label><input type="number" step="0.01" id="fp-${c.c}" value="${pr[c.c]||''}" placeholder="0,00" style="width:100%;padding:5px 7px;border:1px solid #D5DDE8;border-radius:5px;font-size:12px"></div>
+        <div><label style="font-size:10px;color:#637085;display:block;margin-bottom:2px">Contrato (L) <span style="color:#1B55A8">0=∞</span></label><input type="number" step="0.01" id="fc-contrato-${c.c}" value="${s.contrato||0}" style="width:100%;padding:5px 7px;border:1px solid #D5DDE8;border-radius:5px;font-size:12px"></div>
+        <div><label style="font-size:10px;color:#637085;display:block;margin-bottom:2px">Saldo Atual (L)</label><input type="number" step="0.01" id="fc-saldo-${c.c}" value="${s.atual||0}" style="width:100%;padding:5px 7px;border:1px solid #D5DDE8;border-radius:5px;font-size:12px"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+function toggleFP(c){const chk=document.getElementById('fc-'+c).checked;document.getElementById('fp-fields-'+c).style.display=chk?'grid':'none';}
+function openForModal(){editId=null;['razao','fantasia','cnpj','resp','tel','end','cidade'].forEach(f=>document.getElementById('f-'+f).value='');renderForCombs([],{},{});document.getElementById('mfor-title').textContent='Novo Fornecedor';document.getElementById('modal-for').classList.add('open');}
+function editFor(id){editId=id;const f=forn.find(x=>x.id===id);['razao','fantasia','cnpj','resp','tel','end','cidade'].forEach(k=>document.getElementById('f-'+k).value=f[k]||'');renderForCombs(f.combs||[],f.precos||{},f.saldos||{});document.getElementById('mfor-title').textContent='Editar Fornecedor';document.getElementById('modal-for').classList.add('open');}
+function delFor(id){if(confirm('Excluir fornecedor?')){forn=forn.filter(x=>x.id!==id);persist();renderFor();}}
+function saveFor(){
+  const razao=document.getElementById('f-razao').value,cnpj=document.getElementById('f-cnpj').value;
+  if(!razao||!cnpj){alert('Razão Social e CNPJ obrigatórios');return;}
+  const combs=TC.filter(c=>document.getElementById('fc-'+c.c).checked).map(c=>c.c);
+  const precos={};const saldos={};
+  combs.forEach(c=>{
+    precos[c]=Number(document.getElementById('fp-'+c).value)||0;
+    const contrato=Number(document.getElementById('fc-contrato-'+c).value)||0;
+    const atual=Number(document.getElementById('fc-saldo-'+c).value)||0;
+    saldos[c]={contrato,atual};
+  });
+  const obj={id:editId||uid(),razao,fantasia:document.getElementById('f-fantasia').value,cnpj,resp:document.getElementById('f-resp').value,tel:document.getElementById('f-tel').value,end:document.getElementById('f-end').value,cidade:document.getElementById('f-cidade').value,combs,precos,saldos};
+  if(editId)forn=forn.map(x=>x.id===editId?obj:x);else forn=[...forn,obj];
+  persist();closeModal('modal-for');renderFor();
+}
+function openSaldoModal(id){
+  const f=forn.find(x=>x.id===id);if(!f)return;
+  document.getElementById('saldo-for-info').innerHTML='⛽ '+f.fantasia+'<br><small style="font-weight:400;color:#637085">'+f.cnpj+'</small>';
+  document.getElementById('saldo-fields').innerHTML=(f.combs||[]).map(c=>{
+    const s=f.saldos?.[c]||{contrato:0,atual:0};
+    return`<div style="border:1px solid #EFF3F9;border-radius:6px;padding:10px;margin-bottom:8px">
+      <p style="font-size:12px;font-weight:600;margin-bottom:6px">${getCombD(c)}</p>
+      <div class="form-grid">
+        <div class="form-group" style="margin:0"><label>Qtd. Contrato (L)</label><input type="number" id="s-contrato-${c}" value="${s.contrato||0}" step="0.01"></div>
+        <div class="form-group" style="margin:0"><label>Saldo Atual (L)</label><input type="number" id="s-atual-${c}" value="${s.atual||0}" step="0.01"></div>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('saldo-erros').style.display='none';
+  document.getElementById('modal-saldo').dataset.fornId=id;
+  document.getElementById('modal-saldo').classList.add('open');
+}
+function saveSaldo(){
+  const id=document.getElementById('modal-saldo').dataset.fornId;
+  const f=forn.find(x=>x.id===id);if(!f)return;
+  const saldos={...(f.saldos||{})};
+  (f.combs||[]).forEach(c=>{saldos[c]={contrato:Number(document.getElementById('s-contrato-'+c).value)||0,atual:Number(document.getElementById('s-atual-'+c).value)||0};});
+  forn=forn.map(x=>x.id===id?{...x,saldos}:x);
+  persist();closeModal('modal-saldo');renderFor();
+}
+
+// ══ AUTORIZAÇÕES ══════════════════════════════════════════════
+function renderAut(){
+  const tb=document.querySelector('#tbl-aut tbody');
+  const q=(document.getElementById('f-aut-q')?.value||'').toLowerCase();
+  const sit=document.getElementById('f-aut-sit')?.value||'';
+  let lista=[...aut].sort((a,b)=>b.data.localeCompare(a.data));
+  if(sit)lista=lista.filter(a=>a.situacao===sit);
+  if(q)lista=lista.filter(a=>(a.numero+a.placa+a.fornNome+a.sec).toLowerCase().includes(q));
+  if(!lista.length){tb.innerHTML='<tr><td colspan="11" style="text-align:center;padding:24px;color:#637085">Nenhuma autorização encontrada.</td></tr>';return;}
+  const sC={'Emitida':['#D68A00','#FFF3DC'],'Utilizada':['#1A8A4A','#E6F4EC'],'Cancelada':['#C0392B','#FDECEC']};
+  tb.innerHTML=lista.map(a=>{
+    const[sc,sb]=sC[a.situacao]||['#637085','#F5F5F5'];
+    const emitida=a.situacao==='Emitida';
+    const strike=a.situacao==='Cancelada'?'style="opacity:.55;text-decoration:line-through"':'';
+    return`<tr ${strike}><td style="font-weight:700;color:#1B55A8;font-family:monospace;font-size:11px">${a.numero}</td><td>${fmtDt(a.data)}</td><td style="font-size:11px">${a.veicNome||'-'}</td><td><strong>${a.placa||'-'}</strong></td><td>${bdg(a.sec,'#1B55A8','#EBF2FC')}</td><td style="font-size:11px">${a.fornNome||'-'}</td><td>${getCombD(a.comb)}</td><td>${fmtN(a.qtd)} L</td><td style="color:#1A8A4A;font-weight:500">${fmtR(a.total||0)}</td><td>${bdg(a.situacao,sc,sb)}</td><td style="white-space:nowrap">
+      <button class="ic-btn" onclick="openEditAutModal('${a.id}')" title="Editar" ${!emitida?'disabled':''}>✏️</button>
+      <button class="ic-btn" onclick="printAut('${a.id}')" title="Imprimir">🖨️</button>
+      <button class="ic-btn" onclick="showQR('${a.id}')" title="QR Code">📲</button>
+      <button class="ic-btn" onclick="cancelarAut('${a.id}')" title="Cancelar" ${!emitida?'disabled':''}>🚫</button>
+      <button class="ic-btn" onclick="delAut('${a.id}')" title="Excluir" style="color:#C0392B">🗑️</button>
+    </td></tr>`;
+  }).join('');
+}
+function openAutModal(){
+  document.getElementById('a-data').value=new Date().toISOString().split('T')[0];
+  document.getElementById('a-resp').value='';document.getElementById('a-obs').value='';document.getElementById('a-qtd').value='';
+  document.getElementById('a-erros').style.display='none';document.getElementById('a-total').style.display='none';
+  document.getElementById('a-veic-info').style.display='none';document.getElementById('a-saldo-bar-wrap').style.display='none';
+  document.getElementById('a-saldo-hint').textContent='';
+  document.getElementById('a-veiculo').innerHTML='<option value="">Selecione...</option>'+veic.map(v=>`<option value="${v.id}">${v.placa} — ${v.modelo} (${v.sec})</option>`).join('');
+  document.getElementById('a-forn').innerHTML='<option value="">Selecione...</option>'+forn.map(f=>`<option value="${f.id}">${f.fantasia}</option>`).join('');
+  document.getElementById('a-comb').innerHTML='<option value="">Selecione...</option>';
+  const dtA=document.getElementById('a-data');
+  document.getElementById('aut-num-disp').textContent=gerarNumAut(dtA.value);
+  dtA.oninput=()=>document.getElementById('aut-num-disp').textContent=gerarNumAut(dtA.value);
+  document.getElementById('modal-aut').classList.add('open');
+}
+function onAutVeic(){
+  const v=veic.find(x=>x.id===document.getElementById('a-veiculo').value);
+  if(v){const i=document.getElementById('a-veic-info');i.style.display='block';i.innerHTML=`Placa: <b>${v.placa}</b> | Comb.: <b>${getCombD(v.comb)}</b> | Sec.: <b>${v.sec}</b> | Tanque: <b>${v.cap}L</b>`;}
+  onAutFor();
+}
+function onAutFor(){
+  const fn=forn.find(x=>x.id===document.getElementById('a-forn').value);
+  const v=veic.find(x=>x.id===document.getElementById('a-veiculo').value);
+  if(fn){document.getElementById('a-comb').innerHTML=fn.combs.map(c=>`<option value="${c}">${getCombD(c)}</option>`).join('');if(v&&fn.combs.includes(v.comb))document.getElementById('a-comb').value=v.comb;}
+  onAutComb();
+}
+function onAutComb(){updateSaldoInfo();calcAutTotal();}
+function updateSaldoInfo(){
+  const fn=forn.find(x=>x.id===document.getElementById('a-forn').value);
+  const c=document.getElementById('a-comb').value;
+  const wrap=document.getElementById('a-saldo-bar-wrap');
+  const hint=document.getElementById('a-saldo-hint');
+  if(!fn||!c){wrap.style.display='none';hint.textContent='';return;}
+  const s=fn.saldos?.[c];
+  if(!s||Number(s.contrato)===0){wrap.style.display='none';hint.textContent='(ilimitado)';return;}
+  const atual=Number(s.atual),total=Number(s.contrato);
+  const pct=Math.max(0,Math.round(atual/total*100));
+  const cor=pct>50?'#1A8A4A':pct>20?'#D68A00':'#C0392B';
+  hint.textContent=`(saldo: ${fmtN(atual,0)}L)`;
+  hint.style.color=cor;
+  document.getElementById('a-saldo-txt').innerHTML=`Saldo: <b style="color:${cor}">${fmtN(atual,0)} L</b> de ${fmtN(total,0)} L — ${pct}%`;
+  document.getElementById('a-saldo-fill').style.width=pct+'%';
+  document.getElementById('a-saldo-fill').style.background=cor;
+  wrap.style.display='block';
+}
+function calcAutTotal(){
+  const fn=forn.find(x=>x.id===document.getElementById('a-forn').value);
+  const c=document.getElementById('a-comb').value;const q=Number(document.getElementById('a-qtd').value);
+  if(fn&&c&&q>0){const t=document.getElementById('a-total');t.style.display='block';t.textContent='Valor estimado: '+fmtR(q*(fn.precos?.[c]||0));}
+}
+function saveAut(){
+  const errs=[],vId=document.getElementById('a-veiculo').value,fId=document.getElementById('a-forn').value;
+  const qtd=Number(document.getElementById('a-qtd').value),resp=document.getElementById('a-resp').value;
+  if(!vId)errs.push('Veículo obrigatório');if(!fId)errs.push('Fornecedor obrigatório');
+  if(!qtd||qtd<=0)errs.push('Quantidade deve ser maior que zero');if(!resp)errs.push('Responsável obrigatório');
+  if(errs.length){const el=document.getElementById('a-erros');el.innerHTML=errs.join('<br>');el.style.display='block';return;}
+  const v=veic.find(x=>x.id===vId),fn=forn.find(x=>x.id===fId),comb=document.getElementById('a-comb').value;
+  if(v&&v.cap&&qtd>v.cap){const el=document.getElementById('a-erros');el.innerHTML=`⚠️ Qtd (${fmtN(qtd)}L) excede capacidade do tanque (${fmtN(v.cap)}L)`;el.style.display='block';return;}
+  const s=fn?.saldos?.[comb];
+  if(s&&Number(s.contrato)>0&&qtd>Number(s.atual)){
+    const el=document.getElementById('a-erros');el.innerHTML=`⚠️ Saldo insuficiente! Disponível: ${fmtN(Number(s.atual),0)}L — Solicitado: ${fmtN(qtd,0)}L`;el.style.display='block';return;
+  }
+  const vu=fn?.precos?.[comb]||0;
+  aut=[...aut,{id:uid(),numero:gerarNumAut(document.getElementById('a-data').value),data:document.getElementById('a-data').value,vId,veicNome:v?.modelo,placa:v?.placa,sec:v?.sec,fId,fornNome:fn?.fantasia,comb,qtd,vu,total:qtd*vu,resp,obs:document.getElementById('a-obs').value,situacao:'Emitida'}];
+  debitarSaldo(fId,comb,qtd);
+  persist();closeModal('modal-aut');renderAut();renderFor();
+}
+function cancelarAut(id){
+  if(!confirm('Cancelar esta autorização?'))return;
+  const a=aut.find(x=>x.id===id);if(!a||a.situacao!=='Emitida')return;
+  restaurarSaldo(a.fId,a.comb,a.qtd);
+  aut=aut.map(x=>x.id===id?{...x,situacao:'Cancelada'}:x);
+  persist();renderAut();renderFor();
+}
+function delAut(id){
+  const a=aut.find(x=>x.id===id);if(!a)return;
+  const vinc=abs.filter(x=>x.autId===id);
+  if(vinc.length){alert(`⚠️ Esta autorização possui ${vinc.length} abastecimento(s) vinculado(s).\nExclua-os antes de excluir a autorização.`);return;}
+  if(!confirm(`Excluir a autorização ${a.numero}?`))return;
+  if(a.situacao==='Emitida')restaurarSaldo(a.fId,a.comb,a.qtd);
+  aut=aut.filter(x=>x.id!==id);
+  persist();renderAut();renderFor();
+}
+function printAut(id){
+  const a=aut.find(x=>x.id===id);if(!a)return;
+  const mun=getCfg('cfg-orgao')||'Prefeitura Municipal';
+  const cancelado=a.situacao==='Cancelada';
+  const qrData=encodeURIComponent(`AUT:${a.numero}|VEI:${a.placa}|COMB:${getCombD(a.comb)}|QTD:${a.qtd}L|DATA:${fmtDt(a.data)}|SIT:${a.situacao}`);
+  const w=window.open('','_blank');
+  w.document.write(`<!DOCTYPE html><html><head><title>Aut. ${a.numero}</title><style>
+    body{font-family:sans-serif;padding:40px;max-width:640px;margin:auto;color:#1A2A3A}
+    table{width:100%;border-collapse:collapse}td{padding:9px;border:1px solid #ccc;font-size:13px}
+    .num{text-align:center;font-size:28px;font-weight:bold;color:#1B55A8;font-family:monospace;margin:14px 0}
+    .sub{text-align:center;font-size:11px;color:#637085;margin-bottom:18px}
+    h1{font-size:15px;text-align:center;color:#0B1F3A}
+    .cancel-stamp{text-align:center;background:#FDECEC;border:3px solid #C0392B;color:#C0392B;font-size:20px;font-weight:900;padding:12px;margin:14px 0;border-radius:8px;letter-spacing:3px}
+    .qr-wrap{display:flex;flex-direction:column;align-items:center;margin-top:20px;gap:8px}
+    @media print{button{display:none}}
+  </style></head><body>
+  <h1>${mun.toUpperCase()}</h1>
+  <h1>AUTORIZAÇÃO DE ABASTECIMENTO</h1>
+  ${cancelado?'<div class="cancel-stamp">⚠️ AUTORIZAÇÃO CANCELADA ⚠️</div>':''}
+  <div class="num">${a.numero}</div>
+  <div class="sub">Data: ${fmtDt(a.data)} — Situação: <strong>${a.situacao}</strong></div>
+  <table>
+    <tr><td><b>Veículo:</b> ${a.veicNome||'-'}</td><td><b>Placa:</b> ${a.placa||'-'}</td></tr>
+    <tr><td><b>Secretaria:</b> ${a.sec||'-'}</td><td><b>Fornecedor:</b> ${a.fornNome||'-'}</td></tr>
+    <tr><td><b>Combustível:</b> ${getCombD(a.comb)}</td><td><b>Qtd. Autorizada:</b> <strong>${fmtN(a.qtd)} litros</strong></td></tr>
+    <tr><td colspan="2"><b>Responsável:</b> ${a.resp}</td></tr>
+    ${a.obs?`<tr><td colspan="2"><b>Obs:</b> ${a.obs}</td></tr>`:''}
+  </table>
+  <div class="qr-wrap">
+    <img src="https://chart.googleapis.com/chart?chs=170x170&cht=qr&chl=${qrData}&choe=UTF-8" alt="QR Code" style="border:1px solid #eee;padding:4px;border-radius:4px">
+    <small style="font-size:10px;color:#637085">Autenticação via QR Code</small>
+  </div>
+  <div style="margin-top:50px;border-top:1px solid #333;padding-top:8px;text-align:center;font-size:11px">Assinatura do Responsável</div>
+  <script>setTimeout(()=>window.print(),500);<\/script>
+  </bo${''}dy></html>`);
+  w.document.close();
+}
+function showQR(id){
+  const a=aut.find(x=>x.id===id);if(!a)return;
+  const cancelado=a.situacao==='Cancelada';
+  document.getElementById('qr-info').innerHTML=`<strong>${a.numero}</strong>${cancelado?'<span style="color:#C0392B;font-weight:700;margin-left:8px">⚠️ CANCELADA</span>':''}<br>Data: ${fmtDt(a.data)} | Situação: <b>${a.situacao}</b><br>Veículo: ${a.placa||'-'} — ${a.veicNome||'-'}<br>Combustível: ${getCombD(a.comb)} · ${fmtN(a.qtd)} L<br>Fornecedor: ${a.fornNome||'-'}`;
+  const qrData=encodeURIComponent(`AUT:${a.numero}|VEI:${a.placa}|COMB:${getCombD(a.comb)}|QTD:${a.qtd}L|DATA:${fmtDt(a.data)}|SIT:${a.situacao}`);
+  document.getElementById('qr-img').src=`https://chart.googleapis.com/chart?chs=200x200&cht=qr&chl=${qrData}&choe=UTF-8`;
+  document.getElementById('modal-qr').classList.add('open');
+}
+
+// ══ ABASTECIMENTOS ════════════════════════════════════════════
+function renderAbastecimentos(){
+  const fSec=document.getElementById('f-abs-sec')?.value||'',fMes=document.getElementById('f-abs-mes')?.value||'';
+  const el=document.getElementById('f-abs-sec');
+  if(el.options.length<2)el.innerHTML='<option value="">Todas Secretarias</option>'+sec.map(s=>`<option value="${s.sigla}">${s.sigla}</option>`).join('');
+  const list=abs.filter(a=>{if(fSec&&a.sec!==fSec)return false;if(fMes&&!a.dt.startsWith(fMes))return false;return true;}).sort((a,b)=>a.dt.localeCompare(b.dt));
+  const tL=list.reduce((s,a)=>s+a.qtd,0),tV=list.reduce((s,a)=>s+a.qtd*a.vUnit,0);
+  document.getElementById('abs-count').textContent=list.length;
+  document.getElementById('abs-litros').textContent=fmtN(tL,0)+' L';
+  document.getElementById('abs-valor').textContent=fmtR(tV);
+  document.querySelector('#tbl-abs tbody').innerHTML=list.map(a=>{const fn=forn.find(x=>x.id===a.fId);return`<tr><td>${fmtDt(a.dt)}</td><td><strong>${a.pl}</strong></td><td>${bdg(a.sec,'#1B55A8','#EBF2FC')}</td><td style="font-size:11px">${fn?.fantasia||'-'}</td><td>${getCombD(a.comb)}</td><td>${fmtN(a.qtd)}</td><td>${fmtR(a.vUnit)}</td><td style="color:#1A8A4A;font-weight:500">${fmtR(a.qtd*a.vUnit)}</td><td>${Number(a.kmI||0).toLocaleString('pt-BR')}</td><td>${Number(a.kmF||0).toLocaleString('pt-BR')}</td><td style="font-size:11px">${a.resp}</td><td style="white-space:nowrap"><button class="ic-btn" onclick="openEditAbsQtdModal('${a.id}')" title="Editar qtd">⚙️</button><button class="ic-btn" onclick="openEditKmModal('${a.id}')" title="Editar KM">🛣️</button><button class="ic-btn" onclick="delAbs('${a.id}')" title="Excluir" style="color:#C0392B">🗑️</button></td></tr>`;}).join('');
+  document.getElementById('abs-tfoot-lit').textContent=fmtN(tL)+' L';
+  document.getElementById('abs-tfoot-val').textContent=fmtR(tV);
+}
+function openAbsModal(){
+  document.getElementById('ab-data').value=new Date().toISOString().split('T')[0];
+  ['resp','obs'].forEach(f=>document.getElementById('ab-'+f).value='');
+  ['qtd','vunit','kmi','kmf'].forEach(f=>document.getElementById('ab-'+f).value='');
+  document.getElementById('ab-erros').style.display='none';document.getElementById('ab-total').style.display='none';document.getElementById('ab-veic-info').style.display='none';
+  document.getElementById('ab-veiculo').innerHTML='<option value="">Selecione...</option>'+veic.map(v=>`<option value="${v.id}">${v.placa} — ${v.modelo} (${v.sec})</option>`).join('');
+  document.getElementById('ab-forn').innerHTML='<option value="">Selecione...</option>'+forn.map(f=>`<option value="${f.id}">${f.fantasia}</option>`).join('');
+  document.getElementById('ab-comb').innerHTML='<option value="">Selecione...</option>';
+  document.getElementById('modal-abs').classList.add('open');
+}
+function onAbsVeic(){const v=veic.find(x=>x.id===document.getElementById('ab-veiculo').value);if(v){const i=document.getElementById('ab-veic-info');i.style.display='block';i.innerHTML=`Placa: <b>${v.placa}</b> | Comb.: <b>${getCombD(v.comb)}</b> | Sec.: <b>${v.sec}</b>`;document.getElementById('ab-kmi').value=v.km;onAbsFor();}}
+function onAbsFor(){const fn=forn.find(x=>x.id===document.getElementById('ab-forn').value);const v=veic.find(x=>x.id===document.getElementById('ab-veiculo').value);if(fn){document.getElementById('ab-comb').innerHTML=fn.combs.map(c=>`<option value="${c}">${getCombD(c)}</option>`).join('');if(v&&fn.combs.includes(v.comb)){document.getElementById('ab-comb').value=v.comb;document.getElementById('ab-vunit').value=fn.precos?.[v.comb]||'';}}calcAbsTotal();}
+function calcAbsTotal(){const q=Number(document.getElementById('ab-qtd').value),vu=Number(document.getElementById('ab-vunit').value);if(q>0&&vu>0){const t=document.getElementById('ab-total');t.style.display='block';t.textContent='Total: '+fmtR(q*vu);}}
+function saveAbs(){
+  const errs=[],vId=document.getElementById('ab-veiculo').value,fId=document.getElementById('ab-forn').value;
+  const qtd=Number(document.getElementById('ab-qtd').value),kmi=Number(document.getElementById('ab-kmi').value),kmf=Number(document.getElementById('ab-kmf').value);
+  if(!vId)errs.push('Veículo obrigatório');if(!fId)errs.push('Fornecedor obrigatório');
+  if(!qtd||qtd<=0)errs.push('Quantidade > 0');
+  if(kmi&&kmf&&kmi>kmf)errs.push('KM Inicial > KM Final');
+  if(errs.length){const el=document.getElementById('ab-erros');el.innerHTML=errs.join('<br>');el.style.display='block';return;}
+  const vObj=veic.find(x=>x.id===vId),fn=forn.find(x=>x.id===fId),comb=document.getElementById('ab-comb').value;
+  const vu=Number(document.getElementById('ab-vunit').value)||Number(fn?.precos?.[comb]||0);
+  abs=[...abs,{id:uid(),dt:document.getElementById('ab-data').value,vId,pl:vObj?.placa||'',sec:vObj?.sec||'',fId,comb,qtd,vUnit:vu,kmI:kmi,kmF:kmf,resp:document.getElementById('ab-resp').value,obs:document.getElementById('ab-obs').value,autId:null}];
+  if(vObj&&kmf)veic=veic.map(x=>x.id===vId?{...x,km:kmf}:x);
+  persist();closeModal('modal-abs');renderAbastecimentos();
+}
+function delAbs(id){
+  if(!confirm('Excluir este abastecimento?'))return;
+  const a=abs.find(x=>x.id===id);
+  if(a&&a.autId){
+    const outros=abs.filter(x=>x.autId===a.autId&&x.id!==id);
+    if(outros.length===0)aut=aut.map(x=>x.id===a.autId?{...x,situacao:'Emitida'}:x);
+  }
+  abs=abs.filter(x=>x.id!==id);
+  persist();renderAbastecimentos();
+  if(document.getElementById('page-autorizacoes').classList.contains('active'))renderAut();
+}
+
+// Importar de Autorizações
+function openImportAutModal(){
+  document.getElementById('imp-ini').value='';document.getElementById('imp-fim').value='';
+  document.getElementById('imp-tabela-wrap').innerHTML='<p style="color:#637085;font-size:12px;text-align:center;padding:20px 0">Informe o intervalo de datas.</p>';
+  document.getElementById('imp-erros').style.display='none';
+  document.getElementById('modal-import-aut').classList.add('open');
+}
+function filtrarAutParaImport(){
+  const ini=document.getElementById('imp-ini').value,fim=document.getElementById('imp-fim').value;
+  if(!ini||!fim)return;
+  const lista=aut.filter(a=>a.situacao==='Emitida'&&a.data>=ini&&a.data<=fim);
+  const wrap=document.getElementById('imp-tabela-wrap');
+  if(!lista.length){wrap.innerHTML='<p style="color:#637085;font-size:12px;text-align:center;padding:20px 0">Nenhuma autorização Emitida no período.</p>';return;}
+  wrap.innerHTML=`<p style="font-size:11px;color:#637085;margin-bottom:8px">${lista.length} autorização(ões) com situação Emitida</p>
+  <div class="tbl-wrap"><table><thead><tr><th><input type="checkbox" id="imp-all" onchange="toggleAllImp(this)"></th><th>Nº</th><th>Data</th><th>Veículo / Placa</th><th>Secretaria</th><th>Combustível</th><th>Qtd (L)</th><th>Valor</th></tr></thead><tbody>
+  ${lista.map(a=>`<tr><td><input type="checkbox" class="imp-chk" value="${a.id}" checked></td><td style="font-family:monospace;font-weight:700;color:#1B55A8;font-size:11px">${a.numero}</td><td>${fmtDt(a.data)}</td><td>${a.veicNome||'-'}<br><small style="color:#637085">${a.placa||'-'}</small></td><td>${bdg(a.sec,'#1B55A8','#EBF2FC')}</td><td>${getCombD(a.comb)}</td><td>${fmtN(a.qtd)} L</td><td style="color:#1A8A4A">${fmtR(a.total||0)}</td></tr>`).join('')}
+  </tbody></table></div>`;
+}
+function toggleAllImp(cb){document.querySelectorAll('.imp-chk').forEach(c=>c.checked=cb.checked);}
+function confirmarImport(){
+  const sel=[...document.querySelectorAll('.imp-chk:checked')].map(c=>c.value);
+  if(!sel.length){const e=document.getElementById('imp-erros');e.textContent='Selecione pelo menos uma autorização.';e.style.display='block';return;}
+  let g=0;
+  sel.forEach(aId=>{
+    const a=aut.find(x=>x.id===aId);if(!a)return;
+    const vObj=veic.find(x=>x.id===a.vId);
+    abs=[...abs,{id:uid(),dt:a.data,vId:a.vId,pl:a.placa||'',sec:a.sec||'',fId:a.fId,comb:a.comb,qtd:a.qtd,vUnit:a.vu||0,kmI:vObj?.km||0,kmF:vObj?.km||0,resp:a.resp,obs:'Importado da autorização '+a.numero,autId:aId}];
+    aut=aut.map(x=>x.id===aId?{...x,situacao:'Utilizada'}:x);g++;
+  });
+  persist();closeModal('modal-import-aut');renderAbastecimentos();
+  alert(`✅ ${g} abastecimento(s) gerado(s)!\nAutorizações marcadas como "Utilizada".\nAtualize os campos KM nos registros criados.`);
+}
+
+// Editar KM
+function openEditKmModal(absId){
+  const a=abs.find(x=>x.id===absId);if(!a)return;
+  document.getElementById('ekm-ini').value=a.kmI||0;document.getElementById('ekm-fin').value=a.kmF||0;
+  document.getElementById('ekm-erros').style.display='none';
+  document.getElementById('ekm-info').textContent=`Veículo: ${a.pl} | Data: ${fmtDt(a.dt)} | ${getCombD(a.comb)} | ${fmtN(a.qtd)} L`;
+  document.getElementById('modal-edit-km').dataset.absId=absId;
+  document.getElementById('modal-edit-km').classList.add('open');
+}
+function saveEditKm(){
+  const absId=document.getElementById('modal-edit-km').dataset.absId;
+  const ini=Number(document.getElementById('ekm-ini').value),fin=Number(document.getElementById('ekm-fin').value);
+  if(ini>fin&&fin>0){const e=document.getElementById('ekm-erros');e.textContent='KM Inicial não pode ser maior que KM Final';e.style.display='block';return;}
+  abs=abs.map(x=>x.id===absId?{...x,kmI:ini,kmF:fin}:x);
+  persist();closeModal('modal-edit-km');renderAbastecimentos();
+}
+
+// Editar Autorização
+function openEditAutModal(id){
+  const a=aut.find(x=>x.id===id);if(!a||a.situacao!=='Emitida')return;
+  document.getElementById('edit-aut-num-disp').textContent=a.numero;
+  document.getElementById('ea-data').value=a.data;document.getElementById('ea-resp').value=a.resp||'';document.getElementById('ea-obs').value=a.obs||'';document.getElementById('ea-qtd').value=a.qtd;
+  const v=veic.find(x=>x.id===a.vId);
+  document.getElementById('ea-veiculo-info').value=v?`${v.placa} — ${v.modelo} (${v.sec})`:a.placa||'-';
+  document.getElementById('ea-forn-info').value=a.fornNome||'-';
+  document.getElementById('ea-comb-info').value=getCombD(a.comb);
+  document.getElementById('ea-cap-hint').textContent=v&&v.cap?`(máx ${fmtN(v.cap)}L tanque)`:'';
+  document.getElementById('ea-erros').style.display='none';document.getElementById('ea-total').style.display='none';
+  document.getElementById('modal-edit-aut').dataset.autId=id;
+  calcEditAutTotal();
+  document.getElementById('modal-edit-aut').classList.add('open');
+}
+function calcEditAutTotal(){
+  const id=document.getElementById('modal-edit-aut').dataset.autId;
+  const a=aut.find(x=>x.id===id);if(!a)return;
+  const q=Number(document.getElementById('ea-qtd').value);
+  if(q>0){const t=document.getElementById('ea-total');t.style.display='block';t.textContent='Valor estimado: '+fmtR(q*(a.vu||0));}
+}
+function saveEditAut(){
+  const id=document.getElementById('modal-edit-aut').dataset.autId;
+  const a=aut.find(x=>x.id===id);if(!a)return;
+  const qtdNova=Number(document.getElementById('ea-qtd').value),resp=document.getElementById('ea-resp').value;
+  const errs=[];
+  if(!qtdNova||qtdNova<=0)errs.push('Quantidade > 0');if(!resp)errs.push('Responsável obrigatório');
+  const v=veic.find(x=>x.id===a.vId);
+  if(v&&v.cap&&qtdNova>v.cap)errs.push(`Excede capacidade do tanque (${fmtN(v.cap)}L)`);
+  const fn=forn.find(x=>x.id===a.fId);const s=fn?.saldos?.[a.comb];
+  if(s&&Number(s.contrato)>0){const diff=qtdNova-a.qtd;if(diff>0&&diff>Number(s.atual))errs.push(`Saldo insuficiente para aumento! Disponível: ${fmtN(Number(s.atual),0)}L`);}
+  if(errs.length){const el=document.getElementById('ea-erros');el.innerHTML='⚠️ '+errs.join('<br>⚠️ ');el.style.display='block';return;}
+  const diff=qtdNova-a.qtd;
+  if(diff>0)debitarSaldo(a.fId,a.comb,diff);else if(diff<0)restaurarSaldo(a.fId,a.comb,-diff);
+  aut=aut.map(x=>x.id===id?{...x,qtd:qtdNova,total:qtdNova*(a.vu||0),resp,obs:document.getElementById('ea-obs').value,data:document.getElementById('ea-data').value}:x);
+  persist();closeModal('modal-edit-aut');renderAut();renderFor();
+}
+
+// Editar Qtd Abastecimento
+function openEditAbsQtdModal(id){
+  const a=abs.find(x=>x.id===id);if(!a)return;
+  document.getElementById('eaq-info').innerHTML=`Veículo: <b>${a.pl}</b> | Data: <b>${fmtDt(a.dt)}</b> | Comb: <b>${getCombD(a.comb)}</b>`;
+  document.getElementById('eaq-qtd').value=a.qtd;document.getElementById('eaq-vunit').value=a.vUnit;
+  const lim=document.getElementById('eaq-limite');
+  if(a.autId){const ao=aut.find(x=>x.id===a.autId);if(ao){lim.innerHTML=`⚠️ Autorização <b>${ao.numero}</b>: máx <b>${fmtN(ao.qtd)} L</b>`;lim.style.display='block';document.getElementById('eaq-qtd').max=ao.qtd;}else{lim.style.display='none';document.getElementById('eaq-qtd').removeAttribute('max');}}else{lim.style.display='none';document.getElementById('eaq-qtd').removeAttribute('max');}
+  document.getElementById('eaq-erros').style.display='none';document.getElementById('eaq-total').style.display='none';
+  document.getElementById('modal-edit-abs-qtd').dataset.absId=id;
+  calcEditAbsQtdTotal();
+  document.getElementById('modal-edit-abs-qtd').classList.add('open');
+}
+function calcEditAbsQtdTotal(){const vu=Number(document.getElementById('eaq-vunit').value),q=Number(document.getElementById('eaq-qtd').value);if(q>0&&vu>0){const t=document.getElementById('eaq-total');t.style.display='block';t.textContent='Total: '+fmtR(q*vu);}}
+function saveEditAbsQtd(){
+  const id=document.getElementById('modal-edit-abs-qtd').dataset.absId;
+  const a=abs.find(x=>x.id===id);if(!a)return;
+  const qtd=Number(document.getElementById('eaq-qtd').value);const errs=[];
+  if(!qtd||qtd<=0)errs.push('Quantidade > 0');
+  if(a.autId){const ao=aut.find(x=>x.id===a.autId);if(ao&&qtd>ao.qtd)errs.push(`Não pode ultrapassar o autorizado (${fmtN(ao.qtd)} L)`);}
+  if(errs.length){const el=document.getElementById('eaq-erros');el.innerHTML='⚠️ '+errs.join('<br>⚠️ ');el.style.display='block';return;}
+  abs=abs.map(x=>x.id===id?{...x,qtd}:x);
+  persist();closeModal('modal-edit-abs-qtd');renderAbastecimentos();
+}
+
+// ══ RELATÓRIOS ════════════════════════════════════════════════
+let _relAbsFilt=[],_relVeicFilt=[],_relSecFilt=[],_relForFilt=[];
+function populateRelFiltros(){
+  const rv=document.getElementById('rf-veic');if(rv.options.length<2)rv.innerHTML='<option value="">Todos</option>'+veic.map(v=>`<option value="${v.id}">${v.placa} — ${v.modelo}</option>`).join('');
+  const rs=document.getElementById('rf-sec');if(rs.options.length<2)rs.innerHTML='<option value="">Todas</option>'+sec.map(s=>`<option value="${s.sigla}">${s.sigla}</option>`).join('');
+  const rfo=document.getElementById('rf-for');if(rfo.options.length<2)rfo.innerHTML='<option value="">Todos</option>'+forn.map(f=>`<option value="${f.id}">${f.fantasia}</option>`).join('');
+  const rc=document.getElementById('rf-comb');if(rc.options.length<2)rc.innerHTML='<option value="">Todos</option>'+TC.map(c=>`<option value="${c.c}">${c.d}</option>`).join('');
+  const ro=document.getElementById('rf-orig');if(ro.options.length<2)ro.innerHTML='<option value="">Todas</option>'+OR.map(o=>`<option value="${o.c}">${o.d}</option>`).join('');
+}
+function limparFiltrosRel(){['rf-veic','rf-sec','rf-for','rf-comb','rf-orig'].forEach(id=>document.getElementById(id).value='');document.getElementById('rf-ini').value='';document.getElementById('rf-fim').value='';renderRelatorios();}
+function getRelFiltros(){return{fVeic:document.getElementById('rf-veic').value,fSec:document.getElementById('rf-sec').value,fFor:document.getElementById('rf-for').value,fComb:document.getElementById('rf-comb').value,fOrig:document.getElementById('rf-orig').value,fIni:document.getElementById('rf-ini').value,fFim:document.getElementById('rf-fim').value};}
+function filtrarAbsRel(f){
+  let l=abs.filter(a=>{if(f.fVeic&&a.vId!==f.fVeic)return false;if(f.fSec&&a.sec!==f.fSec)return false;if(f.fFor&&a.fId!==f.fFor)return false;if(f.fComb&&a.comb!==f.fComb)return false;if(f.fIni&&a.dt<f.fIni)return false;if(f.fFim&&a.dt>f.fFim)return false;return true;});
+  if(f.fOrig)l=l.filter(a=>{const v=veic.find(x=>x.id===a.vId);return v?.orig===f.fOrig;});
+  return l;
+}
+function renderRelatorios(){
+  populateRelFiltros();
+  const f=getRelFiltros();_relAbsFilt=filtrarAbsRel(f);
+  const tL=_relAbsFilt.reduce((s,a)=>s+a.qtd,0),tG=_relAbsFilt.reduce((s,a)=>s+a.qtd*a.vUnit,0);
+  document.getElementById('rel-resumo').textContent=`${_relAbsFilt.length} abastecimento(s) · ${fmtN(tL,0)} L · ${fmtR(tG)}`;
+  const veicF=f.fVeic?veic.filter(v=>v.id===f.fVeic):veic.filter(v=>!f.fOrig||v.orig===f.fOrig);
+  _relVeicFilt=[];
+  document.querySelector('#tbl-rel-veic tbody').innerHTML=veicF.map(v=>{
+    const a=_relAbsFilt.filter(x=>x.vId===v.id);if(!a.length)return'';
+    const l=a.reduce((s,x)=>s+x.qtd,0),g=a.reduce((s,x)=>s+x.qtd*x.vUnit,0),km=a.reduce((s,x)=>s+(Number(x.kmF)-Number(x.kmI)),0);
+    _relVeicFilt.push({placa:v.placa,modelo:v.modelo,secretaria:v.sec,origem:getOrigD(v.orig),nAbs:a.length,litros:l,gasto:g,km,consumo:(km>0&&l>0?(km/l).toFixed(2):'')});
+    return`<tr><td><strong>${v.placa}</strong></td><td>${v.modelo}</td><td>${bdg(v.sec,'#1B55A8','#EBF2FC')}</td><td>${getOrigD(v.orig)}</td><td>${a.length}</td><td>${fmtN(l)} L</td><td style="color:#1A8A4A;font-weight:500">${fmtR(g)}</td><td>${km.toLocaleString('pt-BR')} km</td><td>${km>0&&l>0?(km/l).toFixed(2)+' km/L':'—'}</td></tr>`;
+  }).join('')||'<tr><td colspan="9" style="text-align:center;color:#637085;padding:16px">Nenhum dado</td></tr>';
+  const secF=f.fSec?sec.filter(s=>s.sigla===f.fSec):sec;_relSecFilt=[];
+  document.querySelector('#tbl-rel-sec tbody').innerHTML=secF.map(s=>{
+    const a=_relAbsFilt.filter(x=>x.sec===s.sigla);if(!a.length)return'';
+    const l=a.reduce((t,x)=>t+x.qtd,0),g=a.reduce((t,x)=>t+x.qtd*x.vUnit,0);
+    _relSecFilt.push({sigla:s.sigla,nome:s.nome,nAbs:a.length,litros:l,gasto:g});
+    return`<tr><td>${bdg(s.sigla,'#1B55A8','#EBF2FC')}</td><td>${s.nome}</td><td>${a.length}</td><td>${fmtN(l)} L</td><td style="color:#1A8A4A">${fmtR(g)}</td></tr>`;
+  }).join('')||'<tr><td colspan="5" style="text-align:center;color:#637085;padding:16px">Nenhum dado</td></tr>';
+  const forF=f.fFor?forn.filter(x=>x.id===f.fFor):forn;_relForFilt=[];
+  document.querySelector('#tbl-rel-for tbody').innerHTML=forF.map(fo=>{
+    const a=_relAbsFilt.filter(x=>x.fId===fo.id);if(!a.length)return'';
+    const l=a.reduce((t,x)=>t+x.qtd,0),fat=a.reduce((t,x)=>t+x.qtd*x.vUnit,0);
+    _relForFilt.push({fornecedor:fo.fantasia,nAbs:a.length,litros:l,faturado:fat});
+    return`<tr><td>⛽ ${fo.fantasia}</td><td>${a.length}</td><td>${fmtN(l)} L</td><td style="color:#1A8A4A">${fmtR(fat)}</td></tr>`;
+  }).join('')||'<tr><td colspan="4" style="text-align:center;color:#637085;padding:16px">Nenhum dado</td></tr>';
+}
+function _buildRelLabel(){
+  const f=getRelFiltros();const p=[];
+  if(f.fVeic){const v=veic.find(x=>x.id===f.fVeic);if(v)p.push('Veículo: '+v.placa);}
+  if(f.fSec)p.push('Sec: '+f.fSec);if(f.fFor){const fo=forn.find(x=>x.id===f.fFor);if(fo)p.push('Forn: '+fo.fantasia);}
+  if(f.fComb)p.push('Comb: '+getCombD(f.fComb));if(f.fOrig)p.push('Orig: '+getOrigD(f.fOrig));
+  if(f.fIni||f.fFim)p.push('Período: '+(f.fIni?fmtDt(f.fIni):'início')+' a '+(f.fFim?fmtDt(f.fFim):'fim'));
+  return p.length?p.join(' | '):'Todos os registros';
+}
+function exportRelPDF(){
+  if(!_relVeicFilt.length&&!_relSecFilt.length&&!_relForFilt.length){alert('Nenhum dado para exportar com os filtros atuais.');return;}
+  const{jsPDF}=window.jspdf;const doc=new jsPDF({orientation:'landscape',unit:'mm',format:'a4'});
+  const mun=getCfg('cfg-orgao')||'Prefeitura Municipal';const label=_buildRelLabel();
+  doc.setFontSize(10);doc.setFont('helvetica','bold');doc.text(mun,148,14,{align:'center'});
+  doc.setFontSize(13);doc.text('Relatório Gerencial de Frota',148,21,{align:'center'});
+  doc.setFontSize(8);doc.setFont('helvetica','normal');doc.text('Filtros: '+label,148,27,{align:'center'});doc.text('Gerado: '+new Date().toLocaleString('pt-BR'),148,32,{align:'center'});
+  doc.setDrawColor(27,85,168);doc.setLineWidth(0.5);doc.line(14,35,283,35);
+  let y=38;
+  if(_relVeicFilt.length){
+    doc.setFontSize(10);doc.setFont('helvetica','bold');doc.text('Por Veículo',14,y+3);
+    doc.autoTable({head:[['Placa','Modelo','Secretaria','Origem','Nº Abs.','Total Litros','Total Gasto','KM Rodados','Consumo']],body:_relVeicFilt.map(r=>[r.placa,r.modelo,r.secretaria,r.origem,r.nAbs,fmtN(r.litros)+' L',fmtR(r.gasto),r.km.toLocaleString('pt-BR')+' km',r.consumo?r.consumo+' km/L':'—']),startY:y+6,styles:{fontSize:7,cellPadding:1.5},headStyles:{fillColor:[27,85,168],textColor:255,fontStyle:'bold'},alternateRowStyles:{fillColor:[240,244,249]},margin:{left:14,right:14}});
+  }
+  if(_relSecFilt.length){
+    doc.addPage();doc.setFontSize(10);doc.setFont('helvetica','bold');doc.text('Por Secretaria',14,20);
+    doc.autoTable({head:[['Sigla','Secretaria','Nº Abs.','Total Litros','Total Gasto']],body:_relSecFilt.map(r=>[r.sigla,r.nome,r.nAbs,fmtN(r.litros)+' L',fmtR(r.gasto)]),startY:23,styles:{fontSize:7,cellPadding:1.5},headStyles:{fillColor:[27,85,168],textColor:255,fontStyle:'bold'},alternateRowStyles:{fillColor:[240,244,249]},margin:{left:14,right:14}});
+  }
+  if(_relForFilt.length){
+    doc.addPage();doc.setFontSize(10);doc.setFont('helvetica','bold');doc.text('Por Fornecedor',14,20);
+    doc.autoTable({head:[['Fornecedor','Nº Abs.','Total Litros','Total Faturado']],body:_relForFilt.map(r=>[r.fornecedor,r.nAbs,fmtN(r.litros)+' L',fmtR(r.faturado)]),startY:23,styles:{fontSize:7,cellPadding:1.5},headStyles:{fillColor:[27,85,168],textColor:255,fontStyle:'bold'},alternateRowStyles:{fillColor:[240,244,249]},margin:{left:14,right:14}});
+  }
+  const pg=doc.internal.getNumberOfPages();for(let i=1;i<=pg;i++){doc.setPage(i);doc.setFontSize(7);doc.setFont('helvetica','normal');doc.text(`TCE-PI · ${new Date().toLocaleString('pt-BR')} · Pág. ${i}/${pg}`,148,200,{align:'center'});}
+  doc.save('relatorio_frota.pdf');
+}
+function exportRelXLS(){
+  if(!_relVeicFilt.length&&!_relSecFilt.length&&!_relForFilt.length){alert('Nenhum dado para exportar com os filtros atuais.');return;}
+  if(typeof XLSX==='undefined'){alert('Biblioteca Excel não carregada. Verifique a conexão.');return;}
+  const wb=XLSX.utils.book_new();const mun=getCfg('cfg-orgao')||'Prefeitura Municipal';const label=_buildRelLabel();
+  if(_relVeicFilt.length){const ws=XLSX.utils.aoa_to_sheet([[mun],['Por Veículo'],['Filtros: '+label],[],['Placa','Modelo','Secretaria','Origem','Nº Abs.','Total Litros','Total Gasto (R$)','KM Rodados','Consumo (km/L)'],..._relVeicFilt.map(r=>[r.placa,r.modelo,r.secretaria,r.origem,r.nAbs,+r.litros.toFixed(2),+r.gasto.toFixed(2),r.km,r.consumo?+r.consumo:''])]);ws['!cols']=[{wch:12},{wch:22},{wch:12},{wch:10},{wch:7},{wch:14},{wch:16},{wch:12},{wch:14}];XLSX.utils.book_append_sheet(wb,ws,'Por Veículo');}
+  if(_relSecFilt.length){const ws=XLSX.utils.aoa_to_sheet([[mun],['Por Secretaria'],['Filtros: '+label],[],['Sigla','Secretaria','Nº Abs.','Total Litros','Total Gasto (R$)'],..._relSecFilt.map(r=>[r.sigla,r.nome,r.nAbs,+r.litros.toFixed(2),+r.gasto.toFixed(2)])]);ws['!cols']=[{wch:8},{wch:36},{wch:7},{wch:14},{wch:16}];XLSX.utils.book_append_sheet(wb,ws,'Por Secretaria');}
+  if(_relForFilt.length){const ws=XLSX.utils.aoa_to_sheet([[mun],['Por Fornecedor'],['Filtros: '+label],[],['Fornecedor','Nº Abs.','Total Litros','Total Faturado (R$)'],..._relForFilt.map(r=>[r.fornecedor,r.nAbs,+r.litros.toFixed(2),+r.faturado.toFixed(2)])]);ws['!cols']=[{wch:30},{wch:7},{wch:14},{wch:18}];XLSX.utils.book_append_sheet(wb,ws,'Por Fornecedor');}
+  if(_relAbsFilt.length){const ws=XLSX.utils.aoa_to_sheet([[mun],['Detalhe de Abastecimentos'],['Filtros: '+label],[],['Data','Placa','Secretaria','Fornecedor','Combustível','Qtd (L)','Vlr Unit.','Total (R$)','KM Ini','KM Fim','Responsável'],..._relAbsFilt.map(a=>{const fn=forn.find(x=>x.id===a.fId);return[a.dt,a.pl,a.sec,fn?.fantasia||'-',getCombD(a.comb),+a.qtd,+a.vUnit,+(a.qtd*a.vUnit).toFixed(2),+(a.kmI||0),+(a.kmF||0),a.resp];})]);ws['!cols']=[{wch:12},{wch:12},{wch:10},{wch:24},{wch:16},{wch:8},{wch:10},{wch:12},{wch:10},{wch:10},{wch:20}];XLSX.utils.book_append_sheet(wb,ws,'Detalhe');}
+  XLSX.writeFile(wb,'relatorio_frota_'+new Date().toISOString().slice(0,10)+'.xlsx');
+}
+
+// ══ EXPORTAÇÃO TCE-PI ════════════════════════════════════════
+function dlCSV(c,f){const b=new Blob(['\uFEFF'+c],{type:'text/csv;charset=utf-8;'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=f;a.click();URL.revokeObjectURL(u);}
+function consolidarAbs(lista){
+  const m={};
+  lista.forEach(a=>{const k=`${a.vId}||${a.comb}`;if(!m[k]){const v=veic.find(x=>x.id===a.vId)||{};const sO=sec.find(x=>x.sigla===a.sec)||{};m[k]={vId:a.vId,comb:a.comb,pl:a.pl,sec:a.sec,v,secObj:sO,qtdTotal:0,kmIni:Infinity,kmFin:0,nAbs:0};}m[k].qtdTotal+=Number(a.qtd||0);m[k].kmIni=Math.min(m[k].kmIni,Number(a.kmI||0));m[k].kmFin=Math.max(m[k].kmFin,Number(a.kmF||0));m[k].nAbs++;});
+  return Object.values(m).map(r=>({...r,kmIni:r.kmIni===Infinity?0:r.kmIni}));
+}
+function exportTCEAbs(tipo){
+  const ini=getCfg('exp-abs-ini'),fim=getCfg('exp-abs-fim');
+  let lista=abs;if(ini)lista=lista.filter(a=>a.dt>=ini);if(fim)lista=lista.filter(a=>a.dt<=fim);
+  if(!lista.length){alert('Nenhum abastecimento no período.');return;}
+  const mesRef=getCfg('cfg-mesref')||'';const cons=consolidarAbs(lista);
+  if(tipo==='csv'){
+    const h='modelo;placa;renavam;anoFabricacao;anoModelo;tipoVeiculo;origemVeiculo;orgaoLocalizacao;capacidade;quantidadeAbastecimento;tipoCombustivel;kmInicial;kmFinal';
+    const r=cons.map(x=>[x.v.modelo||x.pl,x.pl,String(x.v.renavam||'').padStart(11,'0'),x.v.anoFab||'',x.v.anoMod||'',x.v.tipo||'',x.v.orig||'',x.secObj.nome||x.sec,Number(x.v.cap||0).toFixed(2),x.qtdTotal.toFixed(2),x.comb,Math.round(x.kmIni),Math.round(x.kmFin)].join(';'));
+    dlCSV([h,...r].join('\n'),`abastecimento_${mesRef.replace('-','')}_TCE-PI.csv`);
+  } else {
+    gerarPDF('Relatório de Abastecimento — Cód. 517',['Modelo','Placa','RENAVAM','Ano Fab.','Ano Mod.','Tipo','Orig.','Órgão','Cap.(L)','Qtd(L)','Comb.','KM Ini','KM Fin','Nº'],
+      cons.map(x=>[x.v.modelo||x.pl,x.pl,String(x.v.renavam||'').padStart(11,'0'),x.v.anoFab||'',x.v.anoMod||'',getTVD(x.v.tipo),getOrigD(x.v.orig),x.secObj.nome||x.sec,fmtN(x.v.cap||0),fmtN(x.qtdTotal),getCombD(x.comb),Math.round(x.kmIni),Math.round(x.kmFin),x.nAbs]),
+      `Período: ${ini?fmtDt(ini):'início'} a ${fim?fmtDt(fim):'fim'}`,'abastecimento_TCE-PI.pdf');
+  }
+}
+function exportTCEPropCed(tipo){
+  const ibge=getCfg('cfg-ibge')||'0000000';const lista=veic.filter(v=>v.orig==='1'||v.orig==='2');
+  if(!lista.length){alert('Nenhum veículo próprio/cedido.');return;}
+  if(tipo==='csv'){const h='modelo;placa;renavam;anoFabricacao;anoModelo;tipoCombustivel;estadoConservacao;localizacao;veiculoCedido;orgaoDestVeicCedido;dataInicCessao;dataFimCessao';const r=lista.map(v=>[v.modelo,v.placa,String(v.renavam).padStart(11,'0'),v.anoFab,v.anoMod,v.comb,v.sit,ibge,v.orig==='2'?'1':'0',v.orgaodest||'',v.dtinices||'',v.dtfimces||''].join(';'));dlCSV([h,...r].join('\n'),'veiculos_proprios_cedidos_TCE-PI.csv');}
+  else{gerarPDF('Veículos Próprios e Cedidos — Cód. 503',['Modelo','Placa','RENAVAM','Ano Fab.','Ano Mod.','Comb.','Conservação','IBGE','Cedido','Órgão Destino','Dt.Início','Dt.Fim'],lista.map(v=>[v.modelo,v.placa,String(v.renavam).padStart(11,'0'),v.anoFab,v.anoMod,getCombD(v.comb),v.sit,ibge,v.orig==='2'?'Sim':'Não',v.orgaodest||'—',v.dtinices||'—',v.dtfimces||'—']),getCfg('cfg-municipio'),'veiculos_proprios_cedidos_TCE-PI.pdf');}
+}
+function exportTCELocSub(tipo){
+  const ibge=getCfg('cfg-ibge')||'0000000';const lista=veic.filter(v=>v.orig==='3'||v.orig==='4');
+  if(!lista.length){alert('Nenhum veículo locado/sublocado.');return;}
+  if(tipo==='csv'){const h='modelo;placa;renavam;anoFabricacao;anoModelo;tipoCombustivel;cpfOuCnpj;nomeLocador;localizacao;valorUnitMensal;possuiMotorista;codigoCw';const r=lista.map(v=>[v.modelo,v.placa,String(v.renavam).padStart(11,'0'),v.anoFab,v.anoMod,v.comb,String(v.cpfcnpj||'').replace(/\D/g,''),v.locador||'',ibge,Number(v.valmensal||0).toFixed(2),v.motorista||'0',v.cw||''].join(';'));dlCSV([h,...r].join('\n'),'veiculos_locados_TCE-PI.csv');}
+  else{gerarPDF('Veículos Locados e Sublocados — Cód. 443',['Modelo','Placa','RENAVAM','Ano Fab.','Ano Mod.','Comb.','CPF/CNPJ','Locador','IBGE','Vlr Mensal','Motorista','CW'],lista.map(v=>[v.modelo,v.placa,String(v.renavam).padStart(11,'0'),v.anoFab,v.anoMod,getCombD(v.comb),v.cpfcnpj||'',v.locador||'',ibge,fmtR(v.valmensal||0),v.motorista==='1'?'Sim':'Não',v.cw||'']),getCfg('cfg-municipio'),'veiculos_locados_TCE-PI.pdf');}
+}
+function gerarPDF(titulo,colunas,linhas,subtitulo,arquivo){
+  const{jsPDF}=window.jspdf;const doc=new jsPDF({orientation:'landscape',unit:'mm',format:'a4'});
+  const mun=getCfg('cfg-orgao')||getCfg('cfg-municipio');const mesRef=getCfg('cfg-mesref')||'';
+  doc.setFontSize(10);doc.setFont('helvetica','bold');doc.text(mun,148,14,{align:'center'});
+  doc.setFontSize(13);doc.text(titulo,148,21,{align:'center'});
+  doc.setFontSize(9);doc.setFont('helvetica','normal');if(subtitulo)doc.text(subtitulo,148,27,{align:'center'});if(mesRef)doc.text('Mês Ref.: '+mesRef,148,32,{align:'center'});
+  doc.setDrawColor(27,85,168);doc.setLineWidth(0.5);doc.line(14,35,283,35);
+  doc.autoTable({head:[colunas],body:linhas,startY:38,styles:{fontSize:7,cellPadding:2},headStyles:{fillColor:[27,85,168],textColor:255,fontStyle:'bold'},alternateRowStyles:{fillColor:[240,244,249]},margin:{left:14,right:14}});
+  const pg=doc.internal.getNumberOfPages();for(let i=1;i<=pg;i++){doc.setPage(i);doc.setFontSize(7);doc.setFont('helvetica','normal');doc.text(`TCE-PI · ${new Date().toLocaleString('pt-BR')} · Pág. ${i}/${pg}`,148,200,{align:'center'});}
+  doc.save(arquivo);
+}
+
+// ══ ENTIDADE / BRASÃO ════════════════════════════════════════
+function loadBrasao(input){const f=input.files[0];if(!f)return;const r=new FileReader();r.onload=e=>{sv('fr_brasao',e.target.result);applyBrasao(e.target.result);};r.readAsDataURL(f);}
+function applyBrasao(src){
+  if(!src){document.getElementById('sb-brasao').style.display='none';document.getElementById('brasao-ph').style.display='';const pv=document.getElementById('brasao-preview');if(pv)pv.style.display='none';return;}
+  const sb=document.getElementById('sb-brasao');sb.src=src;sb.style.display='block';
+  document.getElementById('brasao-ph').style.display='none';
+  const pv=document.getElementById('brasao-preview');if(pv){pv.src=src;pv.style.display='block';}
+}
+function removeBrasao(){sv('fr_brasao','');applyBrasao('');document.getElementById('brasao-file').value='';}
+function salvarConfiguracoes(){
+  sv('fr_cfg_tipo',document.getElementById('cfg-tipo-entidade').value);
+  sv('fr_cfg_mun',document.getElementById('cfg-municipio').value);
+  sv('fr_cfg_ibge',document.getElementById('cfg-ibge').value);
+  sv('fr_cfg_orgao',document.getElementById('cfg-orgao').value);
+  sv('fr_cfg_mesref',document.getElementById('cfg-mesref').value);
+  atualizarSidebarEntidade();
+  const ok=document.getElementById('cfg-salvo');ok.style.display='inline';setTimeout(()=>ok.style.display='none',2500);
+}
+function atualizarSidebarEntidade(){
+  const tipo=ld('fr_cfg_tipo','Prefeitura Municipal');const mun=ld('fr_cfg_mun','São Raimundo Nonato');
+  document.getElementById('sb-tipo-label').textContent=tipo;
+  document.getElementById('sb-mun-label').textContent=mun;
+  const sel=document.getElementById('cfg-tipo-entidade');if(sel)sel.value=tipo;
+}
+
+// ══ IBGE ══════════════════════════════════════════════════════
+
+// ══ IBGE ══════════════════════════════════════════════════════
+function populateIBGE(){
+  const sel=document.getElementById('cfg-municipio-sel');
+  if(!sel)return;
+  const saved=ld('fr_cfg_mun','São Raimundo Nonato');
+  sel.innerHTML='<option value="">Selecione...</option>'+
+    IBGE_MUN.map(m=>`<option value="${m.d}" data-c="${m.c}"${m.d===saved?' selected':''}>${m.d}</option>`).join('');
+  const opt=[...sel.options].find(o=>o.value===saved);
+  if(opt){
+    document.getElementById('cfg-ibge').value=opt.dataset.c||'';
+    document.getElementById('cfg-municipio').value=opt.value;
+    document.getElementById('cfg-orgao').value=(ld('fr_cfg_tipo','Prefeitura Municipal')+' de '+opt.value);
+  }
+}
+function onMunicipioChange(sel){
+  const opt=sel.options[sel.selectedIndex];
+  if(!opt||!opt.value)return;
+  const tipo=document.getElementById('cfg-tipo-entidade').value||'Prefeitura Municipal';
+  document.getElementById('cfg-ibge').value=opt.dataset.c||'';
+  document.getElementById('cfg-municipio').value=opt.value;
+  document.getElementById('cfg-orgao').value=tipo+' de '+opt.value;
+}
+function onEntidadeChange(){
+  const tipo=document.getElementById('cfg-tipo-entidade').value||'Prefeitura Municipal';
+  const mun=document.getElementById('cfg-municipio').value||'';
+  if(mun)document.getElementById('cfg-orgao').value=tipo+(mun?' de '+mun:'');
+}
+
+// ══ USUÁRIOS ═════════════════════════════════════════════════
+function persistUsers(){sv('fr_users',USERS);}
+
+function roleLabel(r){return r==='admin'?'Administrador':r==='usuario'?'Usuário':'Fornecedor';}
+function roleColor(r){return r==='admin'?['#0B1F3A','#D6E4F7']:r==='usuario'?['#1A8A4A','#E6F4EC']:['#D68A00','#FFF3DC'];}
+
+function userStatus(u){
+  const hoje=new Date().toISOString().slice(0,10);
+  if(u.dtInicio&&hoje<u.dtInicio)return['Aguardando','#637085','#F5F8FC'];
+  if(u.dtFim&&hoje>u.dtFim)return['Expirado','#C0392B','#FDECEC'];
+  return['Ativo','#1A8A4A','#E6F4EC'];
+}
+
+function renderUsers(){
+  const tbody=document.querySelector('#tbl-users tbody');
+  if(!tbody)return;
+  tbody.innerHTML=USERS.map(u=>{
+    const[sc,sb]=roleColor(u.role);
+    const[st,stc,stb]=userStatus(u);
+    const isMe=currentUser&&currentUser.login===u.login;
+    return`<tr>
+      <td><strong style="color:#1B55A8">${u.login}</strong></td>
+      <td>${u.nome}</td>
+      <td><span class="badge" style="color:${sc};background:${sb}">${roleLabel(u.role)}</span></td>
+      <td style="font-size:11px">${u.dtInicio?fmtDt(u.dtInicio):'<span style="color:#aaa">Sem restrição</span>'}</td>
+      <td style="font-size:11px">${u.dtFim?fmtDt(u.dtFim):'<span style="color:#aaa">Sem restrição</span>'}</td>
+      <td><span class="badge" style="color:${stc};background:${stb}">${st}</span></td>
+      <td>
+        <button class="ic-btn" onclick="openUserModal('${u.id}')" title="Editar">✏️</button>
+        ${isMe?'':('<button class="ic-btn" onclick="delUser(\''+u.id+'\')">🗑️</button>')}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function openUserModal(id){
+  editId=id||null;
+  document.getElementById('muser-title').textContent=id?'Editar Usuário':'Novo Usuário';
+  document.getElementById('u-erros').style.display='none';
+  if(id){
+    const u=USERS.find(x=>x.id===id);
+    document.getElementById('u-login').value=u.login;
+    document.getElementById('u-login').disabled=true;
+    document.getElementById('u-nome').value=u.nome;
+    document.getElementById('u-senha').value='';
+    document.getElementById('u-senha2').value='';
+    document.getElementById('u-role').value=u.role;
+    document.getElementById('u-dtini').value=u.dtInicio||'';
+    document.getElementById('u-dtfim').value=u.dtFim||'';
+  } else {
+    ['u-login','u-nome','u-senha','u-senha2','u-dtini','u-dtfim'].forEach(f=>document.getElementById(f).value='');
+    document.getElementById('u-login').disabled=false;
+    document.getElementById('u-role').value='usuario';
+  }
+  document.getElementById('modal-user').classList.add('open');
+}
+
+function saveUser(){
+  const errs=[];
+  const login=document.getElementById('u-login').value.trim();
+  const nome=document.getElementById('u-nome').value.trim();
+  const senha=document.getElementById('u-senha').value;
+  const senha2=document.getElementById('u-senha2').value;
+  const role=document.getElementById('u-role').value;
+  const dtIni=document.getElementById('u-dtini').value;
+  const dtFim=document.getElementById('u-dtfim').value;
+
+  if(!editId&&!login)errs.push('Login obrigatório.');
+  if(!editId&&USERS.find(x=>x.login===login))errs.push('Login já existe.');
+  if(!nome)errs.push('Nome obrigatório.');
+  if(!editId&&!senha)errs.push('Senha obrigatória.');
+  if(senha&&senha.length<4)errs.push('Senha deve ter ao menos 4 caracteres.');
+  if(senha&&senha!==senha2)errs.push('As senhas não coincidem.');
+  if(dtIni&&dtFim&&dtFim<dtIni)errs.push('Data final anterior à data inicial.');
+
+  if(errs.length){
+    const el=document.getElementById('u-erros');
+    el.innerHTML='⚠️ '+errs.join('<br>⚠️ ');
+    el.style.display='block';
+    return;
+  }
+
+  if(editId){
+    USERS=USERS.map(u=>{
+      if(u.id!==editId)return u;
+      return{...u,nome,role,dtInicio:dtIni,dtFim:dtFim,...(senha?{senha}:{})};
+    });
+  } else {
+    USERS=[...USERS,{id:uid(),login,senha,nome,role,dtInicio:dtIni,dtFim:dtFim}];
+  }
+  persistUsers();
+  closeModal('modal-user');
+  renderUsers();
+}
+
+function delUser(id){
+  const u=USERS.find(x=>x.id===id);
+  if(!u)return;
+  if(!confirm('Excluir o usuário "'+u.login+'"?'))return;
+  USERS=USERS.filter(x=>x.id!==id);
+  persistUsers();
+  renderUsers();
+}
+
+// ══ INICIALIZAÇÃO ════════════════════════════════════════════
+window.addEventListener('load',function(){
+  atualizarSidebarEntidade();
+  const b=ld('fr_brasao','');if(b)applyBrasao(b);
+  renderSec();renderVeiculos();renderFor();renderAut();renderAbastecimentos();renderRelatorios();
+});
+</script>
+
+<!-- Modal Usuário -->
+<div class="modal-bg" id="modal-user">
+<div class="modal" style="max-width:480px">
+  <div class="modal-header">
+    <h3 id="muser-title">Novo Usuário</h3>
+    <button class="modal-close" onclick="closeModal('modal-user')">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="form-grid">
+      <div class="form-group"><label>Login (usuário) *</label><input id="u-login" placeholder="ex: joao.silva" oninput="this.value=this.value.toLowerCase().replace(/\s/g,'')"></div>
+      <div class="form-group"><label>Nome completo *</label><input id="u-nome" placeholder="ex: João da Silva"></div>
+      <div class="form-group"><label>Senha *</label><input id="u-senha" type="password" placeholder="Mínimo 4 caracteres"></div>
+      <div class="form-group"><label>Confirmar Senha *</label><input id="u-senha2" type="password" placeholder="Repita a senha"></div>
+      <div class="form-group form-full"><label>Perfil de Acesso *</label>
+        <select id="u-role">
+          <option value="admin">Administrador — acesso total</option>
+          <option value="usuario">Usuário — abastecimentos e relatórios</option>
+          <option value="fornecedor">Fornecedor — somente autorizações</option>
+        </select>
+      </div>
+    </div>
+    <div style="background:#EBF2FC;border-radius:8px;padding:12px 14px;margin:10px 0 4px">
+      <p style="font-size:11px;font-weight:600;color:#1B55A8;margin-bottom:8px">📅 Período de Acesso (opcional)</p>
+      <p style="font-size:11px;color:#637085;margin-bottom:10px">Deixe em branco para acesso permanente.</p>
+      <div class="form-grid">
+        <div class="form-group" style="margin-bottom:4px"><label>Acesso a partir de</label><input id="u-dtini" type="date"></div>
+        <div class="form-group" style="margin-bottom:4px"><label>Acesso até</label><input id="u-dtfim" type="date"></div>
+      </div>
+    </div>
+    <div id="u-erros" class="alert alert-err" style="display:none;margin-top:10px"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-user')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveUser()">💾 Salvar</button>
+    </div>
+  </div>
+</div>
+</div>
+
+</body>
+</html>

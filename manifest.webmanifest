@@ -1,0 +1,19 @@
+{
+  "name": "Gerir Frota",
+  "short_name": "Gerir Frota",
+  "description": "Gestão de frota municipal — alinhado ao TCE-PI",
+  "lang": "pt-BR",
+  "start_url": "./",
+  "scope": "./",
+  "id": "/gerir-frota-abreu/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#F6F8FB",
+  "theme_color": "#217AD8",
+  "categories": ["productivity", "business", "government"],
+  "icons": [
+    { "src": "logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "logo.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
