@@ -1,0 +1,4 @@
+modelo;placa;renavam;anoFabricacao;anoModelo;tipoVeiculo;origemVeiculo;orgaoLocalizacao;capacidade;quantidadeAbastecimento;tipoCombustivel;kmInicial;kmFinal
+Ford Ranger XLT;ABC-1234;12345678901;2023;2024;5;1;Teresina;75;65;4;45000;45350
+Toyota Corolla;DEF-5678;23456789012;2022;2023;1;1;Teresina;55;48;1;32500;32980
+Toyota Corolla;DEF-5678;23456789012;2022;2023;1;1;Teresina;55;48;1;32500;32980

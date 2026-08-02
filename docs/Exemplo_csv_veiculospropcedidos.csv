@@ -1,0 +1,3 @@
+modelo;placa;renavam;anoFabricacao;anoModelo;tipoCombustivel;estadoConservacao;localizacao;veiculoCedido;orgaoDestVeicCedido;dataInicCessao;dataFimCessao
+Ford Ranger XLT;ABC-1234;12345678901;2023;2024;4;Bom;2211001;0;01Prefeitura de Cidade A;2023-01-15;2025-01-14
+Toyota Corolla;DEF-5678;23456789012;2022;2023;1;Ótimo;2211001;0;02Prefeitura de Cidade B;2023-01-15;2025-01-14
