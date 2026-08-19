@@ -1,6 +1,6 @@
 import { getEntity } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel } from '../ui.js';
+import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel, supplierCellHTML } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 import QRCode from 'https://esm.sh/qrcode@1.5.3';
@@ -431,7 +431,7 @@ function autRow(a) {
       <td data-label="Combustível">${esc(fuelLabel(a.fuel_type_code, a.fuel_subtype_id))}</td>
       <td data-label="Qtd" style="white-space:nowrap">${Number(a.authorized_quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L</td>
       <td data-label="Valor est." style="white-space:nowrap;color:var(--success);font-weight:500">${fmtMoney(a.estimated_total)}</td>
-      <td data-label="Fornecedor" style="font-size:12.5px">${esc(a.supplier_trade_name_snapshot || '—')}</td>
+      <td data-label="Fornecedor">${supplierCellHTML(a.supplier_trade_name_snapshot, _suppliers.find(s => s.id === a.supplier_id))}</td>
       <td data-label="Responsável" style="font-size:12.5px">${esc(a.responsible_name)}</td>
       <td data-label="Situação"><span class="${STATUS_BADGE[a.status]}">${esc(STATUS_LABEL[a.status])}</span></td>
       <td class="actions-col">

@@ -44,6 +44,29 @@ export function supplierOptionLabel(s) {
   return parts.length ? `${nome} (${parts.join(' · ')})` : nome;
 }
 
+/** HTML seguro para célula de tabela de fornecedor.
+ *  Linha 1: nome do fornecedor (do snapshot ou do supplier atual — nesta ordem).
+ *  Linha 2 (só se disponível): "SIGLA · nº contrato" em fonte menor/cor suave.
+ *  Usa .cell-stack para se comportar bem em mobile (vira card).
+ *
+ *  @param {string} snapshotName  — nome já gravado na tabela (fallback confiável)
+ *  @param {object|null} supplier — objeto supplier com department + contract_number,
+ *    quando disponível pra enriquecer com a secretaria/contrato atuais
+ */
+export function supplierCellHTML(snapshotName, supplier) {
+  const nome = snapshotName || supplier?.trade_name || supplier?.legal_name || '—';
+  const sec = supplier?.department?.acronym || null;
+  const contrato = (supplier?.contract_number || '').trim() || null;
+  const parts = [];
+  if (sec) parts.push(sec);
+  if (contrato) parts.push('nº ' + contrato);
+  if (!parts.length) return esc(nome);
+  return `<div class="cell-stack">
+    <span style="font-size:12.5px">${esc(nome)}</span>
+    <span style="font-size:11px;color:var(--text-muted);line-height:1.35">${esc(parts.join(' · '))}</span>
+  </div>`;
+}
+
 // =================== TOAST ===================
 let toastSeq = 0;
 export function toast(message, type = 'info', ms = 3500) {

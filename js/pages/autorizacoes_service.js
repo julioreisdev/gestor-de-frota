@@ -1,6 +1,6 @@
 import { getEntity } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel } from '../ui.js';
+import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel, supplierCellHTML } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 import QRCode from 'https://esm.sh/qrcode@1.5.3';
@@ -224,7 +224,7 @@ function srvRow(a) {
       <td data-label="Categoria"><span class="${KIND_BADGE[a.service_kind] || 'badge'}">${esc(KIND_LABEL[a.service_kind] || a.service_kind)}</span></td>
       <td data-label="Serviço" style="font-size:12.5px;max-width:300px"><div class="cell-stack"><span style="white-space:normal">${esc(a.description)}</span></div></td>
       <td data-label="Valor est." style="white-space:nowrap;color:var(--success);font-weight:500">${fmtMoney(a.estimated_value)}</td>
-      <td data-label="Mecânica" style="font-size:12.5px">${esc(a.supplier_trade_name_snapshot || '—')}</td>
+      <td data-label="Mecânica">${supplierCellHTML(a.supplier_trade_name_snapshot, _suppliers.find(s => s.id === a.supplier_id))}</td>
       <td data-label="Responsável" style="font-size:12.5px">${esc(a.responsible_name)}</td>
       <td data-label="Situação"><span class="${STATUS_BADGE[a.status]}">${esc(STATUS_LABEL[a.status])}</span></td>
       <td class="actions-col">

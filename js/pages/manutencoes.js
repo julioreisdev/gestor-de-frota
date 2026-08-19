@@ -1,6 +1,6 @@
 import { pageRoot, pageHeader } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel } from '../ui.js';
+import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel, supplierCellHTML } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 
@@ -257,7 +257,7 @@ function manRow(a) {
       </td>
       <td data-label="Categoria"><span class="${KIND_BADGE[a.kind] || 'badge'}">${esc(KIND_LABEL[a.kind] || a.kind)}</span></td>
       <td data-label="Serviço" style="font-size:12.5px;max-width:300px"><div class="cell-stack"><span style="white-space:normal">${esc(a.description)}</span></div></td>
-      <td data-label="Mecânica" style="font-size:12.5px">${esc(sup?.trade_name || sup?.legal_name || '—')}</td>
+      <td data-label="Mecânica">${supplierCellHTML(a.supplier_trade_name_snapshot || sup?.trade_name || sup?.legal_name, sup)}</td>
       <td data-label="Valor" style="white-space:nowrap;color:var(--success);font-weight:500">${a.total_value != null ? fmtMoney(a.total_value) : '—'}</td>
       <td data-label="Status"><span class="${STATUS_BADGE[a.status]}">${esc(STATUS_LABEL[a.status])}</span></td>
       <td data-label="Origem">${origin}</td>

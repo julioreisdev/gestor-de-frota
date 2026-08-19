@@ -1,6 +1,6 @@
 import { pageRoot, pageHeader, getEntity } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel } from '../ui.js';
+import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel, supplierCellHTML } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 import { openPrintTab } from '../thermal.js';
@@ -263,7 +263,7 @@ function absRow(a) {
       <td data-label="R$/L" style="white-space:nowrap">${Number(a.unit_price).toFixed(3)}</td>
       <td data-label="Total" style="white-space:nowrap;color:var(--success);font-weight:500">${fmtMoney(a.total)}</td>
       <td data-label="KM">${km}</td>
-      <td data-label="Fornecedor" style="font-size:12.5px">${esc(a.supplier_trade_name_snapshot || '—')}</td>
+      <td data-label="Fornecedor">${supplierCellHTML(a.supplier_trade_name_snapshot, _suppliers.find(s => s.id === a.supplier_id))}</td>
       <td data-label="Origem">${origin}</td>
       <td class="actions-col">
         <div class="actions-row">
