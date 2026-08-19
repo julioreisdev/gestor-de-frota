@@ -1,6 +1,6 @@
 import { getEntity } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate } from '../ui.js';
+import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 import QRCode from 'https://esm.sh/qrcode@1.5.3';
@@ -121,7 +121,9 @@ async function loadAll() {
       department_id, department:department_id(acronym, name)
     `).is('deleted_at', null).order('plate'),
     supabase.from('supplier').select(`
-      id, kind, legal_name, trade_name, cnpj, responsible_name, phone
+      id, kind, legal_name, trade_name, cnpj, responsible_name, phone,
+      department_id, contract_number,
+      department:department_id(acronym, name)
     `).in('kind', ['mecanica', 'ambos']).order('legal_name'),
   ]);
   if (a.error) { toast('Falha ao carregar autorizações: ' + a.error.message, 'error'); _items = []; }
@@ -252,8 +254,7 @@ function openSrvModal(id) {
 
   const vehOptions = '<option value="">— Selecione —</option>' +
     _vehicles.map(v => `<option value="${v.id}" ${a?.vehicle_id === v.id ? 'selected' : ''}>${esc(formatPlate(v.plate))} — ${esc(v.model)} (${esc(v.department?.acronym || '—')})</option>`).join('');
-  const supOptions = '<option value="">— Selecione —</option>' +
-    _suppliers.map(s => `<option value="${s.id}" ${a?.supplier_id === s.id ? 'selected' : ''}>${esc(s.trade_name || s.legal_name)}</option>`).join('');
+  const supOptions = '<option value="">— Selecione o veículo primeiro —</option>';
   const kindOptions = Object.entries(KIND_LABEL).map(([k, l]) =>
     `<option value="${k}" ${(a?.service_kind || 'corretiva') === k ? 'selected' : ''}>${esc(l)}</option>`).join('');
 
@@ -270,12 +271,12 @@ function openSrvModal(id) {
         </div>
         <div class="field col-full">
           <label class="field-label">Veículo <span class="req">*</span></label>
-          <select class="select" name="vehicle_id" required ${editing ? 'disabled' : ''}>${vehOptions}</select>
+          <select class="select" name="vehicle_id" id="srv-vehicle" required ${editing ? 'disabled' : ''}>${vehOptions}</select>
         </div>
         <div class="field col-full">
           <label class="field-label">Mecânica <span class="req">*</span></label>
-          <select class="select" name="supplier_id" required ${editing ? 'disabled' : ''}>${supOptions}</select>
-          <span class="field-help">Aparecem aqui apenas fornecedores marcados como Mecânica ou Posto + Mecânica.</span>
+          <select class="select" name="supplier_id" id="srv-supplier" required ${editing ? 'disabled' : ''}>${supOptions}</select>
+          <span class="field-help">Aparecem aqui apenas fornecedores marcados como Mecânica ou Posto + Mecânica, e vinculados à secretaria do veículo.</span>
         </div>
         <div class="field">
           <label class="field-label">Categoria <span class="req">*</span></label>
@@ -303,6 +304,34 @@ function openSrvModal(id) {
     <button class="btn btn-primary" id="srv-save-btn">${editing ? 'Salvar alterações' : 'Emitir autorização'}</button>
   `;
   const m = openModal({ title: editing ? `Editar Autorização ${a.number}` : 'Nova autorização de manutenção', body, footer, size: 'lg' });
+
+  const vehSel = m.querySelector('#srv-vehicle');
+  const supSel = m.querySelector('#srv-supplier');
+
+  /** Filtra fornecedores por secretaria do veículo (mesma lógica da autorização
+   *  de abastecimento). Mantém legados sem department_id sempre visíveis. */
+  function rebuildSupplierOptions(preserveId = '') {
+    const veh = _vehicles.find(x => x.id === vehSel.value);
+    const vehDept = veh?.department_id || null;
+    // _suppliers já veio filtrado por kind=mecanica|ambos
+    const pool = vehDept
+      ? _suppliers.filter(s => !s.department_id || s.department_id === vehDept)
+      : _suppliers;
+    const currentSel = preserveId || supSel.value;
+    const keep = pool.find(s => s.id === currentSel) ? currentSel : '';
+    const placeholder = vehDept
+      ? '<option value="">— Selecione —</option>'
+      : '<option value="">— Selecione o veículo primeiro —</option>';
+    supSel.innerHTML = placeholder + pool
+      .map(s => `<option value="${s.id}" ${s.id === keep ? 'selected' : ''}>${esc(supplierOptionLabel(s))}</option>`)
+      .join('');
+    if (!pool.length && vehDept) {
+      supSel.innerHTML = '<option value="">Nenhuma mecânica cadastrada nesta secretaria</option>';
+    }
+  }
+  vehSel.addEventListener('change', () => rebuildSupplierOptions());
+  rebuildSupplierOptions(a?.supplier_id || '');
+
   m.querySelector('[data-cancel]').addEventListener('click', closeModal);
   m.querySelector('#srv-save-btn').addEventListener('click', () => saveSrv(editing ? id : null));
 }

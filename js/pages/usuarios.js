@@ -1,6 +1,6 @@
 import { pageRoot, pageHeader } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, toast, openModal, closeModal, confirmDialog, formValues } from '../ui.js';
+import { esc, fmtDate, toast, openModal, closeModal, confirmDialog, formValues, supplierOptionLabel } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile } from '../auth.js';
 
@@ -72,7 +72,10 @@ function matchesSearch(u, t) {
 async function loadAll() {
   const [u, s] = await Promise.all([
     supabase.rpc('admin_list_users'),
-    supabase.from('supplier').select('id, trade_name, legal_name').order('legal_name'),
+    supabase.from('supplier').select(`
+      id, trade_name, legal_name, contract_number, department_id,
+      department:department_id(acronym, name)
+    `).order('legal_name'),
   ]);
   if (u.error) { toast('Falha ao carregar usuários: ' + u.error.message, 'error'); _users = []; }
   else _users = u.data || [];
@@ -169,7 +172,7 @@ function openUserModal(id) {
   const u = editing ? _users.find(x => x.id === id) : null;
   const supplierOptions = `
     <option value="">— Nenhum —</option>
-    ${_suppliers.map(s => `<option value="${s.id}" ${u?.supplier_id === s.id ? 'selected' : ''}>${esc(s.trade_name || s.legal_name)}</option>`).join('')}
+    ${_suppliers.map(s => `<option value="${s.id}" ${u?.supplier_id === s.id ? 'selected' : ''}>${esc(supplierOptionLabel(s))}</option>`).join('')}
   `;
   const body = `
     <form id="user-form" autocomplete="off">

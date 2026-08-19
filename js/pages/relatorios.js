@@ -1,6 +1,6 @@
 import { pageRoot, pageHeader, getEntity, reportLogoUrl } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, fmtMoney, toast, formatPlate } from '../ui.js';
+import { esc, fmtDate, fmtMoney, toast, formatPlate, supplierOptionLabel } from '../ui.js';
 import { icons } from '../icons.js';
 import Chart from 'https://esm.sh/chart.js@4.4.1/auto';
 import * as XLSX from 'https://esm.sh/xlsx@0.18.5';
@@ -73,7 +73,10 @@ async function loadAll() {
       fuel_type_code, vehicle_origin_code, department_id, vehicle_type_code,
       department:department_id(acronym, name)
     `).is('deleted_at', null).order('plate'),
-    supabase.from('supplier').select('id, kind, legal_name, trade_name, cnpj, contract_number, department_id').order('legal_name'),
+    supabase.from('supplier').select(`
+      id, kind, legal_name, trade_name, cnpj, contract_number, department_id,
+      department:department_id(acronym, name)
+    `).order('legal_name'),
     supabase.from('supplier_fuel').select('supplier_id, fuel_type_code, fuel_subtype_id, unit_price, contract_amount, current_balance'),
     supabase.from('department').select('id, acronym, name').order('acronym'),
     supabase.from('fuel_type').select('code, description').order('code'),
@@ -133,7 +136,7 @@ function renderFilterCard() {
   `;
   document.getElementById('rf-dept').innerHTML += _depts.map(d => `<option value="${d.id}">${esc(d.acronym)} — ${esc(d.name)}</option>`).join('');
   document.getElementById('rf-veh').innerHTML += _vehicles.map(v => `<option value="${v.id}">${esc(formatPlate(v.plate))} — ${esc(v.model)}</option>`).join('');
-  document.getElementById('rf-sup').innerHTML += _suppliers.map(s => `<option value="${s.id}">${esc(s.trade_name || s.legal_name)}</option>`).join('');
+  document.getElementById('rf-sup').innerHTML += _suppliers.map(s => `<option value="${s.id}">${esc(supplierOptionLabel(s))}</option>`).join('');
   document.getElementById('rf-fuel').innerHTML += _fuels.map(f => `<option value="${f.code}">${esc(f.description)}</option>`).join('');
 
   if (_filter.dept) document.getElementById('rf-dept').value = _filter.dept;
@@ -167,7 +170,10 @@ function renderSummary(k) {
   if (_filter.type === 'maintenance') parts.push('🎯 Só manutenções');
   if (_filter.dept)    parts.push('🏛️ ' + (_depts.find(d => d.id === _filter.dept)?.acronym || ''));
   if (_filter.vehicle) parts.push('🚗 ' + formatPlate(_vehicles.find(v => v.id === _filter.vehicle)?.plate || ''));
-  if (_filter.supplier) parts.push('🏪 ' + (_suppliers.find(s => s.id === _filter.supplier)?.trade_name || _suppliers.find(s => s.id === _filter.supplier)?.legal_name || ''));
+  if (_filter.supplier) {
+    const s = _suppliers.find(x => x.id === _filter.supplier);
+    if (s) parts.push('🏪 ' + supplierOptionLabel(s));
+  }
   if (_filter.fuel)    parts.push('⛽ ' + (_fuels.find(f => f.code === Number(_filter.fuel))?.description || ''));
   el.innerHTML = `
     <div class="report-summary-filters">${parts.map(p => `<span class="filter-pill">${esc(p)}</span>`).join('') || '<span style="color:var(--text-muted);font-size:12px">Nenhum filtro adicional</span>'}</div>
@@ -479,7 +485,7 @@ function renderSaldoFilters() {
       <div class="field"><label class="field-label">Fornecedor</label>
         <select class="select" data-saldof="supplier">
           <option value="">Todos os Fornecedores</option>
-          ${_suppliers.map(s => opt(s.id, s.trade_name || s.legal_name, F.supplier)).join('')}
+          ${_suppliers.map(s => opt(s.id, supplierOptionLabel(s), F.supplier)).join('')}
         </select>
       </div>
       <div class="field"><label class="field-label">Nº Contrato</label>
@@ -536,7 +542,7 @@ function renderKindFilters() {
       <div class="field"><label class="field-label">Mecânica</label>
         <select class="select" data-kindf="supplier">
           <option value="">Todas as Mecânicas</option>
-          ${_suppliers.filter(s => s.kind === 'mecanica' || s.kind === 'ambos').map(s => opt(s.id, s.trade_name || s.legal_name, F.supplier)).join('')}
+          ${_suppliers.filter(s => s.kind === 'mecanica' || s.kind === 'ambos').map(s => opt(s.id, supplierOptionLabel(s), F.supplier)).join('')}
         </select>
       </div>
       <div class="field"><label class="field-label">Categoria</label>

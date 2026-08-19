@@ -1,6 +1,6 @@
 import { getEntity } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate } from '../ui.js';
+import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 import QRCode from 'https://esm.sh/qrcode@1.5.3';
@@ -154,7 +154,9 @@ async function loadAll() {
       department:department_id(acronym, name)
     `).is('deleted_at', null).order('plate'),
     supabase.from('supplier').select(`
-      id, kind, legal_name, trade_name, cnpj, responsible_name, phone
+      id, kind, legal_name, trade_name, cnpj, responsible_name, phone,
+      department_id, contract_number,
+      department:department_id(acronym, name)
     `).order('legal_name'),
     supabase.from('supplier_fuel').select(`
       supplier_id, fuel_type_code, fuel_subtype_id,
@@ -461,12 +463,11 @@ function openAutModal(id) {
   const today = new Date().toISOString().slice(0, 10);
   const defaultResp = me?.full_name || '';
 
-  // Listas iniciais
+  // Listas iniciais. Os fornecedores são filtrados dinamicamente pela
+  // secretaria do veículo escolhido (função rebuildSupplierOptions abaixo).
   const vehOptions = '<option value="">— Selecione —</option>' +
     _vehicles.map(v => `<option value="${v.id}" ${a?.vehicle_id === v.id ? 'selected' : ''}>${esc(formatPlate(v.plate))} — ${esc(v.model)} (${esc(v.department?.acronym || '—')})</option>`).join('');
-  const supOptions = '<option value="">— Selecione —</option>' +
-    _suppliers.filter(s => s.kind !== 'mecanica')
-      .map(s => `<option value="${s.id}" ${a?.supplier_id === s.id ? 'selected' : ''}>${esc(s.trade_name || s.legal_name)}</option>`).join('');
+  const supOptions = '<option value="">— Selecione o veículo primeiro —</option>';
 
   const body = `
     <form id="aut-form" autocomplete="off">
@@ -532,6 +533,34 @@ function openAutModal(id) {
     if (!v) { vehInfo.textContent = ''; return; }
     vehInfo.innerHTML = `Tanque: <b>${v.tank_capacity ? Number(v.tank_capacity).toFixed(0) + ' L' : '—'}</b> · KM atual: <b>${Number(v.current_km || 0).toLocaleString('pt-BR')}</b>`;
   }
+
+  /** Recomputa as opções de fornecedor:
+   *  - Só postos (não mecânica)
+   *  - Se veículo tem department_id → mostra fornecedores da mesma secretaria
+   *    + fornecedores sem secretaria (legados)
+   *  - Se veículo não tem department_id → mostra todos os postos
+   *  Label rico via supplierOptionLabel — mostra "(SIGLA · nº contrato)".
+   *  Preserva a seleção prévia se o item ainda estiver na lista.
+   */
+  function rebuildSupplierOptions(preserveId = '') {
+    const veh = _vehicles.find(x => x.id === vehSel.value);
+    const vehDept = veh?.department_id || null;
+    const postos = _suppliers.filter(s => s.kind !== 'mecanica');
+    const pool = vehDept
+      ? postos.filter(s => !s.department_id || s.department_id === vehDept)
+      : postos;
+    const currentSel = preserveId || supSel.value;
+    const keep = pool.find(s => s.id === currentSel) ? currentSel : '';
+    const placeholder = vehDept
+      ? '<option value="">— Selecione —</option>'
+      : '<option value="">— Selecione o veículo primeiro —</option>';
+    supSel.innerHTML = placeholder + pool
+      .map(s => `<option value="${s.id}" ${s.id === keep ? 'selected' : ''}>${esc(supplierOptionLabel(s))}</option>`)
+      .join('');
+    if (!pool.length && vehDept) {
+      supSel.innerHTML = '<option value="">Nenhum fornecedor cadastrado nesta secretaria</option>';
+    }
+  }
   function refreshFuelOptions(initial = false) {
     const supId = supSel.value;
     if (!supId) {
@@ -590,7 +619,12 @@ function openAutModal(id) {
     }
   }
 
-  vehSel.addEventListener('change', () => { refreshVehicleInfo(); refreshFuelOptions(); refreshSaldo(); });
+  vehSel.addEventListener('change', () => {
+    refreshVehicleInfo();
+    rebuildSupplierOptions();
+    refreshFuelOptions();
+    refreshSaldo();
+  });
   supSel.addEventListener('change', () => { refreshFuelOptions(); refreshSaldo(); });
   fuelSel.addEventListener('change', () => {
     const dec = decFuelKey(fuelSel.value);
@@ -600,14 +634,16 @@ function openAutModal(id) {
   });
   qtyIn.addEventListener('input', refreshTotal);
 
-  // Inicialização (modo edição traz dados)
+  // Inicialização (modo edição traz dados; preserva o fornecedor selecionado)
   if (editing) {
     refreshVehicleInfo();
+    rebuildSupplierOptions(a?.supplier_id || '');
     refreshFuelOptions(true);
     refreshSaldo();
     refreshTotal();
   } else {
     refreshVehicleInfo();
+    rebuildSupplierOptions();
     refreshFuelOptions();
   }
 

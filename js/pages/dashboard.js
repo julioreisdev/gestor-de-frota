@@ -4,7 +4,7 @@
 // =============================================================================
 import { pageRoot, pageHeader } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, fmtMoney, toast, formatPlate } from '../ui.js';
+import { esc, fmtDate, fmtMoney, toast, formatPlate, supplierOptionLabel } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile } from '../auth.js';
 import Chart from 'https://esm.sh/chart.js@4.4.1/auto';
@@ -64,7 +64,10 @@ async function loadAll() {
       fuel_type_code, department_id, department:department_id(acronym, name)
     `).is('deleted_at', null),
     supabase.from('department').select('id, acronym, name').order('acronym'),
-    supabase.from('supplier').select('id, kind, legal_name, trade_name').order('legal_name'),
+    supabase.from('supplier').select(`
+      id, kind, legal_name, trade_name, contract_number, department_id,
+      department:department_id(acronym, name)
+    `).order('legal_name'),
     supabase.from('supplier_fuel').select('supplier_id, fuel_type_code, fuel_subtype_id, contract_amount, current_balance, unit_price'),
     supabase.from('fuel_type').select('code, description').order('code'),
     supabase.from('fueling').select(`
@@ -252,7 +255,7 @@ function renderAlerts() {
         alerts.push({
           level: pct < 5 ? 'danger' : 'warning',
           icon: '⛽',
-          title: `Saldo crítico — ${s?.trade_name || s?.legal_name || '—'} / ${fuel}`,
+          title: `Saldo crítico — ${supplierOptionLabel(s)} / ${fuel}`,
           msg: `Restam ${Number(sf.current_balance).toFixed(2)} L de ${Number(sf.contract_amount).toFixed(2)} L (${pct.toFixed(1)}%).`,
           link: '#/fornecedores',
         });

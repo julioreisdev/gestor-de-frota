@@ -1,6 +1,6 @@
 import { pageRoot, pageHeader, getEntity } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate } from '../ui.js';
+import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 import { openPrintTab } from '../thermal.js';
@@ -115,7 +115,10 @@ async function loadAll() {
       id, plate, model, brand, current_km, tank_capacity, fuel_type_code, fuel_subtype_id,
       department_id, department:department_id(acronym, name)
     `).is('deleted_at', null).order('plate'),
-    supabase.from('supplier').select('id, kind, legal_name, trade_name, cnpj').in('kind', ['posto','ambos']).order('legal_name'),
+    supabase.from('supplier').select(`
+      id, kind, legal_name, trade_name, cnpj, department_id, contract_number,
+      department:department_id(acronym, name)
+    `).in('kind', ['posto','ambos']).order('legal_name'),
     supabase.from('supplier_fuel').select('supplier_id, fuel_type_code, fuel_subtype_id, unit_price, contract_amount, current_balance'),
     supabase.from('fuel_type').select('code, description').order('code'),
     supabase.from('fuel_subtype').select('id, fuel_type_code, description, active').eq('active', true).order('description'),
@@ -143,7 +146,7 @@ function fillFilterSelects() {
   document.getElementById('ff-dept').innerHTML = '<option value="">Todas secretarias</option>' +
     _depts.map(d => `<option value="${d.id}">${esc(d.acronym)} — ${esc(d.name)}</option>`).join('');
   document.getElementById('ff-sup').innerHTML = '<option value="">Todos fornecedores</option>' +
-    _suppliers.map(s => `<option value="${s.id}">${esc(s.trade_name || s.legal_name)}</option>`).join('');
+    _suppliers.map(s => `<option value="${s.id}">${esc(supplierOptionLabel(s))}</option>`).join('');
   document.getElementById('ff-fuel').innerHTML = '<option value="">Todos combustíveis</option>' +
     _fuels.map(f => `<option value="${f.code}">${esc(f.description)}</option>`).join('');
   if (_filter.vehicle) document.getElementById('ff-veh').value = _filter.vehicle;
@@ -398,8 +401,16 @@ function openAbsModal(id, fromAuth = null) {
   const isLinked = !!initial.authorization_id;
   const vehOptions = '<option value="">— Selecione —</option>' +
     _vehicles.map(v => `<option value="${v.id}" ${initial.vehicle_id === v.id ? 'selected' : ''}>${esc(formatPlate(v.plate))} — ${esc(v.model)} (${esc(v.department?.acronym || '—')})</option>`).join('');
-  const supOptions = '<option value="">— Selecione —</option>' +
-    _suppliers.map(s => `<option value="${s.id}" ${initial.supplier_id === s.id ? 'selected' : ''}>${esc(s.trade_name || s.legal_name)}</option>`).join('');
+  // Quando é abast. vinculado a autorização, o fornecedor já vem fixo e o
+  // select fica disabled — nesse caso mostramos só o item escolhido, sem filtro.
+  // Quando é manual, começa vazio e reconstrói pela secretaria do veículo.
+  const initSupOption = isLinked
+    ? (() => {
+        const s = _suppliers.find(x => x.id === initial.supplier_id);
+        return s ? `<option value="${s.id}" selected>${esc(supplierOptionLabel(s))}</option>` : '';
+      })()
+    : '<option value="">— Selecione o veículo primeiro —</option>';
+  const supOptions = initSupOption;
 
   const body = `
     <form id="abs-form" autocomplete="off">
@@ -526,13 +537,36 @@ function openAbsModal(id, fromAuth = null) {
     totalEst.value = (q > 0 && u > 0) ? fmtMoney(q * u) : '—';
   }
 
-  vehSel.addEventListener('change', () => { setHiddenIds(); refreshVehInfo(); });
+  /** Filtra fornecedores pela secretaria do veículo (só quando é
+   *  abastecimento manual — vinculado a autorização o fornecedor é fixo). */
+  function rebuildSupplierOptions(preserveId = '') {
+    if (isLinked) return; // fixo, não mexe
+    const veh = _vehicles.find(x => x.id === (vehSel.value || vehHid.value));
+    const vehDept = veh?.department_id || null;
+    const pool = vehDept
+      ? _suppliers.filter(s => !s.department_id || s.department_id === vehDept)
+      : _suppliers;
+    const currentSel = preserveId || supSel.value || supHid.value;
+    const keep = pool.find(s => s.id === currentSel) ? currentSel : '';
+    const placeholder = vehDept
+      ? '<option value="">— Selecione —</option>'
+      : '<option value="">— Selecione o veículo primeiro —</option>';
+    supSel.innerHTML = placeholder + pool
+      .map(s => `<option value="${s.id}" ${s.id === keep ? 'selected' : ''}>${esc(supplierOptionLabel(s))}</option>`)
+      .join('');
+    if (!pool.length && vehDept) {
+      supSel.innerHTML = '<option value="">Nenhum fornecedor cadastrado nesta secretaria</option>';
+    }
+  }
+
+  vehSel.addEventListener('change', () => { setHiddenIds(); refreshVehInfo(); rebuildSupplierOptions(); refreshFuelOptions(); });
   supSel.addEventListener('change', () => { setHiddenIds(); refreshFuelOptions(); });
   fuelSel.addEventListener('change', () => { refreshFuelHidden(); refreshTotal(); });
   qtyIn.addEventListener('input', refreshTotal);
   upIn.addEventListener('input', refreshTotal);
 
   refreshVehInfo();
+  rebuildSupplierOptions(initial.supplier_id || '');
   refreshFuelOptions();
   refreshTotal();
 

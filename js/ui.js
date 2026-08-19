@@ -23,6 +23,27 @@ export function formatPlate(s) {
   return c; // Mercosul (ABC1D23) ou inválido — devolve cru
 }
 
+/** Label rico para options/dropdowns de fornecedor.
+ *  Depois que passamos a permitir mesmo CNPJ em secretarias diferentes,
+ *  a listagem ficava com nomes idênticos ("POSTO B & B LTDA" 4×) sem forma
+ *  de distinguir. Este helper adiciona sigla da secretaria e nº do contrato
+ *  entre parênteses, quando disponíveis, pra o usuário identificar de bate-pronto.
+ *
+ *  Espera receber o objeto supplier com pelo menos:
+ *    { trade_name, legal_name, department:{acronym}?, contract_number? }
+ *  O join `department:department_id(acronym)` da query Supabase já entrega
+ *  esse shape.
+ */
+export function supplierOptionLabel(s) {
+  const nome = s?.trade_name || s?.legal_name || '—';
+  const sec = s?.department?.acronym || null;
+  const contrato = (s?.contract_number || '').trim() || null;
+  const parts = [];
+  if (sec) parts.push(sec);
+  if (contrato) parts.push('nº ' + contrato);
+  return parts.length ? `${nome} (${parts.join(' · ')})` : nome;
+}
+
 // =================== TOAST ===================
 let toastSeq = 0;
 export function toast(message, type = 'info', ms = 3500) {

@@ -1,6 +1,6 @@
 import { pageRoot, pageHeader } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate } from '../ui.js';
+import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 
@@ -114,8 +114,10 @@ async function loadAll() {
       id, plate, model, brand, current_km,
       department_id, department:department_id(acronym, name)
     `).is('deleted_at', null).order('plate'),
-    supabase.from('supplier').select('id, kind, legal_name, trade_name, cnpj')
-      .in('kind', ['mecanica', 'ambos']).order('legal_name'),
+    supabase.from('supplier').select(`
+      id, kind, legal_name, trade_name, cnpj, department_id, contract_number,
+      department:department_id(acronym, name)
+    `).in('kind', ['mecanica', 'ambos']).order('legal_name'),
     supabase.from('department').select('id, acronym, name').order('acronym'),
     supabase.from('service_authorization').select(`
       id, number, date, vehicle_id, supplier_id, service_kind,
@@ -137,7 +139,7 @@ function fillFilterSelects() {
   document.getElementById('ff-dept').innerHTML = '<option value="">Todas secretarias</option>' +
     _depts.map(d => `<option value="${d.id}">${esc(d.acronym)} — ${esc(d.name)}</option>`).join('');
   document.getElementById('ff-sup').innerHTML = '<option value="">Todas mecânicas</option>' +
-    _suppliers.map(s => `<option value="${s.id}">${esc(s.trade_name || s.legal_name)}</option>`).join('');
+    _suppliers.map(s => `<option value="${s.id}">${esc(supplierOptionLabel(s))}</option>`).join('');
   ['vehicle', 'dept', 'supplier', 'kind', 'status'].forEach(key => {
     const id = { vehicle: 'ff-veh', dept: 'ff-dept', supplier: 'ff-sup', kind: 'ff-kind', status: 'ff-status' }[key];
     if (_filter[key]) document.getElementById(id).value = _filter[key];
@@ -378,8 +380,15 @@ function openManModal(id, fromAuth = null) {
   const isLinked = !!initial.authorization_id;
   const vehOptions = '<option value="">— Selecione —</option>' +
     _vehicles.map(v => `<option value="${v.id}" ${initial.vehicle_id === v.id ? 'selected' : ''}>${esc(formatPlate(v.plate))} — ${esc(v.model)} (${esc(v.department?.acronym || '—')})</option>`).join('');
-  const supOptions = '<option value="">— Selecione —</option>' +
-    _suppliers.map(s => `<option value="${s.id}" ${initial.supplier_id === s.id ? 'selected' : ''}>${esc(s.trade_name || s.legal_name)}</option>`).join('');
+  // Fornecedor: linked → mostra só o item fixo; senão → placeholder que
+  // vai ser preenchido pelo listener do veículo.
+  const initSupOption = isLinked
+    ? (() => {
+        const s = _suppliers.find(x => x.id === initial.supplier_id);
+        return s ? `<option value="${s.id}" selected>${esc(supplierOptionLabel(s))}</option>` : '';
+      })()
+    : '<option value="">— Selecione o veículo primeiro —</option>';
+  const supOptions = initSupOption;
   const kindOptions = Object.entries(KIND_LABEL).map(([k, l]) =>
     `<option value="${k}" ${initial.kind === k ? 'selected' : ''}>${esc(l)}</option>`).join('');
   const statusOptions = Object.entries(STATUS_LABEL).map(([k, l]) =>
@@ -402,12 +411,12 @@ function openManModal(id, fromAuth = null) {
         </div>
         <div class="field col-full">
           <label class="field-label">Veículo <span class="req">*</span></label>
-          <select class="select" name="vehicle_id" required ${isLinked ? 'disabled' : ''}>${vehOptions}</select>
+          <select class="select" name="vehicle_id" id="man-veh" required ${isLinked ? 'disabled' : ''}>${vehOptions}</select>
           <input type="hidden" name="vehicle_id_h" value="${initial.vehicle_id}">
         </div>
         <div class="field col-full">
           <label class="field-label">Mecânica <span class="req">*</span></label>
-          <select class="select" name="supplier_id" required ${isLinked ? 'disabled' : ''}>${supOptions}</select>
+          <select class="select" name="supplier_id" id="man-sup" required ${isLinked ? 'disabled' : ''}>${supOptions}</select>
           <input type="hidden" name="supplier_id_h" value="${initial.supplier_id}">
         </div>
         <div class="field">
@@ -450,6 +459,31 @@ function openManModal(id, fromAuth = null) {
     title: editing ? 'Editar manutenção' : (isLinked ? 'Concluir manutenção' : 'Registrar manutenção'),
     body, footer, size: 'lg',
   });
+  // Filtro por secretaria do veículo (só quando não é linked à autorização)
+  const vehSel = m.querySelector('#man-veh');
+  const supSel = m.querySelector('#man-sup');
+  function rebuildSupplierOptions(preserveId = '') {
+    if (isLinked) return;
+    const veh = _vehicles.find(x => x.id === vehSel.value);
+    const vehDept = veh?.department_id || null;
+    const pool = vehDept
+      ? _suppliers.filter(s => !s.department_id || s.department_id === vehDept)
+      : _suppliers;
+    const currentSel = preserveId || supSel.value;
+    const keep = pool.find(s => s.id === currentSel) ? currentSel : '';
+    const placeholder = vehDept
+      ? '<option value="">— Selecione —</option>'
+      : '<option value="">— Selecione o veículo primeiro —</option>';
+    supSel.innerHTML = placeholder + pool
+      .map(s => `<option value="${s.id}" ${s.id === keep ? 'selected' : ''}>${esc(supplierOptionLabel(s))}</option>`)
+      .join('');
+    if (!pool.length && vehDept) {
+      supSel.innerHTML = '<option value="">Nenhuma mecânica cadastrada nesta secretaria</option>';
+    }
+  }
+  vehSel.addEventListener('change', () => rebuildSupplierOptions());
+  rebuildSupplierOptions(initial.supplier_id || '');
+
   m.querySelector('[data-cancel]').addEventListener('click', closeModal);
   m.querySelector('#man-save-btn').addEventListener('click', () => saveMan(id, initial));
 }
