@@ -775,8 +775,15 @@ async function deleteFor(id) {
 
 function friendlyError(err) {
   const msg = err?.message || String(err);
+  // Cada constraint dá mensagem específica — não agrupar tudo em "cnpj OU combustível"
   if (err?.code === '23505' || /duplicate key|already exists|unique/i.test(msg)) {
-    return 'Já existe um fornecedor com esse CNPJ ou combustível duplicado para o mesmo fornecedor.';
+    if (/ux_supplier_cnpj_dept|supplier_cnpj_key/i.test(msg)) {
+      return 'Esse CNPJ já está cadastrado para essa secretaria. Selecione outra secretaria ou edite o cadastro existente.';
+    }
+    if (/ux_supplier_fuel_unique|supplier_fuel/i.test(msg)) {
+      return 'Combustível/subtipo duplicado neste fornecedor. Remova a linha repetida.';
+    }
+    return 'Registro duplicado.';
   }
   if (err?.code === '23503' || /foreign key/i.test(msg)) {
     return 'Não é possível excluir: há autorizações ou abastecimentos vinculados.';

@@ -197,7 +197,9 @@ create table supplier (
   kind supplier_kind not null default 'posto',
   legal_name text not null,
   trade_name text,
-  cnpj char(14) not null check (cnpj ~ '^[0-9]{14}$') unique,
+  -- v6: CNPJ pode aparecer mais de uma vez — mesmo fornecedor pode ter
+  -- contrato com N secretarias. Unicidade é (cnpj, department_id) via índice.
+  cnpj char(14) not null check (cnpj ~ '^[0-9]{14}$'),
   responsible_name text,
   phone text,
   address text,
@@ -213,6 +215,10 @@ create trigger trg_supplier_set_updated_at before update on supplier
   for each row execute function set_updated_at();
 create index ix_supplier_kind on supplier (kind);
 create index ix_supplier_department on supplier (department_id);
+-- Unicidade composta: mesmo CNPJ só pode aparecer 1× por secretaria.
+-- Cadastros sem secretaria (department_id NULL) NÃO batem entre si — o
+-- Postgres trata NULLs como distintos em índice unique padrão.
+create unique index ux_supplier_cnpj_dept on supplier (cnpj, department_id);
 
 -- =============================================================================
 -- SUPPLIER_FUEL (contrato por combustível)

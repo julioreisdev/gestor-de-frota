@@ -78,5 +78,17 @@ create policy p_servauth_read_internal on service_authorization for select
 alter table entity
   add column if not exists use_logo_in_reports boolean not null default true;
 
+-- =============================================================================
+-- SUPPLIER: permitir mesmo CNPJ em secretarias diferentes.
+-- Antes: cnpj UNIQUE global bloqueava o mesmo fornecedor pra 2 secretarias.
+-- Depois: uniq composto (cnpj, department_id) — 1 cadastro por (cnpj+secretaria).
+-- Idempotente: DROP tenta os dois nomes possíveis do constraint auto-gerado.
+-- =============================================================================
+alter table supplier drop constraint if exists supplier_cnpj_key;
+alter table supplier drop constraint if exists supplier_cnpj_unique;
+drop index if exists supplier_cnpj_key;
+create unique index if not exists ux_supplier_cnpj_dept
+  on supplier (cnpj, department_id);
+
 -- Reload do schema cache do PostgREST
 notify pgrst, 'reload schema';
