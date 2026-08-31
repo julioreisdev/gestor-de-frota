@@ -263,17 +263,31 @@ function updateCardDynamic(code, rows, totalNoFilter, hasFilter, errors, warning
     ? `<span class="badge badge-warning">${warnings.length} aviso(s)</span>`
     : `<span class="badge badge-success">OK</span>`;
 
+  // Renderiza uma linha da lista: "Linha N · PLACA: mensagem"
+  const issueItem = (e) => {
+    const parts = [];
+    if (e.linha != null) parts.push(`<span class="exp-issue-line">L${e.linha}</span>`);
+    if (e.placa) parts.push(`<strong>${esc(e.placa)}</strong>`);
+    const head = parts.join(' · ');
+    return `<li>${head}${head ? ': ' : ''}${esc(e.msg)}</li>`;
+  };
+  // Abrir por padrão quando houver erros — cliente reclamou que "não mostra qual"
+  // porque o "Ver detalhes" antigo era um btn-ghost quase invisível.
+  const issuesOpen = errors.length > 0;
   const issuesHTML = (errors.length || warnings.length) ? `
     <div class="exp-issues-wrap">
-      <button class="btn btn-ghost btn-sm" data-toggle-issues>Ver detalhes</button>
-      <div class="exp-issues">
+      <button class="btn btn-outline btn-sm exp-issues-toggle" data-toggle-issues>
+        <span>${icons.alert}</span>
+        <span data-toggle-label>${issuesOpen ? 'Esconder detalhes' : `Ver detalhes (${errors.length + warnings.length})`}</span>
+      </button>
+      <div class="exp-issues${issuesOpen ? ' open' : ''}">
         ${errors.length ? `<div class="exp-issue-group">
           <h4>Erros (bloqueiam o envio)</h4>
-          <ul>${errors.map(e => `<li><strong>${esc(e.placa || '—')}:</strong> ${esc(e.msg)}</li>`).join('')}</ul>
+          <ul>${errors.map(issueItem).join('')}</ul>
         </div>` : ''}
         ${warnings.length ? `<div class="exp-issue-group" style="margin-top:8px">
           <h4 style="color:var(--warning)">Avisos</h4>
-          <ul>${warnings.map(e => `<li><strong>${esc(e.placa || '—')}:</strong> ${esc(e.msg)}</li>`).join('')}</ul>
+          <ul>${warnings.map(issueItem).join('')}</ul>
         </div>` : ''}
       </div>
     </div>` : '';
@@ -323,7 +337,11 @@ function updateCardDynamic(code, rows, totalNoFilter, hasFilter, errors, warning
     btn.addEventListener('click', () => {
       const wrap = btn.closest('.layout-card').querySelector('.exp-issues');
       wrap.classList.toggle('open');
-      btn.textContent = wrap.classList.contains('open') ? 'Esconder detalhes' : 'Ver detalhes';
+      const label = btn.querySelector('[data-toggle-label]');
+      if (label) {
+        const total = errors.length + warnings.length;
+        label.textContent = wrap.classList.contains('open') ? 'Esconder detalhes' : `Ver detalhes (${total})`;
+      }
     });
   });
 }
@@ -383,12 +401,17 @@ function build517(period) {
     const kmsFinal = list.map(x => x.km_final).filter(n => n != null && n !== '');
     let kmInicial = kmsInit.length ? Math.min(...kmsInit.map(Number)) : 0;
     let kmFinal   = kmsFinal.length ? Math.max(...kmsFinal.map(Number)) : kmInicial;
-    // Regra OUTROS (tipo 99): força sentinelas em renavam/placa/km
+    // Regra OUTROS (tipo 99, TCE §1.1.8): força sentinelas em renavam e KMs.
+    // Placa NÃO é forçada — o TCE exige apenas que INICIE com XYZ (o restante
+    // pode variar); o banco já garante isso via constraint chk_outros_consistency.
+    // Antes forçávamos 'XYZ0000' fixo, o que quebrava a cruzada 1.1.6/1.1.7
+    // porque no 503/443 a placa vinha real (ex: XYZ1230) e no 517 vinha XYZ0000
+    // — divergência gerava erro de "veículo não aparece no 503".
     const isOutros = v.vehicle_type_code === 99;
     const orgao = _depts.find(d => d.id === v.department_id)?.name || _entity?.organ_name || '—';
     out.push({
       modelo: v.model,
-      placa: isOutros ? 'XYZ0000' : cleanPlate(v.plate),
+      placa: cleanPlate(v.plate),
       renavam: isOutros ? '99999999999' : padRenavam(v.renavam),
       anoFabricacao: v.year_manufacture,
       anoModelo: v.year_model,
@@ -478,8 +501,9 @@ const FUEL_517_ALLOWED = new Set([1, 2, 3, 4, 6]); // sem FLEX/HIBRIDO
 
 function validate517(rows) {
   const errors = [], warnings = [];
-  rows.forEach(r => {
-    const ctx = { placa: r.placa };
+  // linha do CSV: 1 = cabeçalho, dados começam na linha 2
+  rows.forEach((r, i) => {
+    const ctx = { placa: r.placa, linha: i + 2 };
     if (!String(r.modelo || '').match(/.{3,300}/)) errors.push({ ...ctx, msg: 'Modelo precisa ter 3 a 300 caracteres.' });
     if (!PLATE_RX.test(r.placa)) errors.push({ ...ctx, msg: `Placa inválida: ${r.placa}` });
     if (!RENAVAM_RX.test(r.renavam)) errors.push({ ...ctx, msg: 'RENAVAM deve ter 11 dígitos.' });
@@ -512,8 +536,8 @@ function validate503(rows) {
   const errors = [], warnings = [];
   // Para validação de cessão, usa o "to" do filtro ou hoje
   const lastDay = _periods['503'].to || new Date().toISOString().slice(0, 10);
-  rows.forEach(r => {
-    const ctx = { placa: r.placa };
+  rows.forEach((r, i) => {
+    const ctx = { placa: r.placa, linha: i + 2 };
     if (!String(r.modelo || '').match(/.{3,300}/)) errors.push({ ...ctx, msg: 'Modelo 3-300 chars.' });
     if (!PLATE_RX.test(r.placa)) errors.push({ ...ctx, msg: `Placa inválida.` });
     if (!RENAVAM_RX.test(r.renavam)) errors.push({ ...ctx, msg: 'RENAVAM 11 dígitos.' });
@@ -533,8 +557,8 @@ function validate503(rows) {
 
 function validate443(rows) {
   const errors = [], warnings = [];
-  rows.forEach(r => {
-    const ctx = { placa: r.placa };
+  rows.forEach((r, i) => {
+    const ctx = { placa: r.placa, linha: i + 2 };
     if (!String(r.modelo || '').match(/.{3,300}/)) errors.push({ ...ctx, msg: 'Modelo 3-300 chars.' });
     if (!PLATE_RX.test(r.placa)) errors.push({ ...ctx, msg: 'Placa inválida.' });
     if (!RENAVAM_RX.test(r.renavam)) errors.push({ ...ctx, msg: 'RENAVAM 11 dígitos.' });
@@ -555,8 +579,8 @@ function crossValidate(r517, r503, r443) {
   const e517 = [], w517 = [];
   const plates503 = new Set(r503.map(x => x.placa));
   const plates443 = new Set(r443.map(x => x.placa));
-  r517.forEach(r => {
-    const ctx = { placa: r.placa };
+  r517.forEach((r, i) => {
+    const ctx = { placa: r.placa, linha: i + 2 };
     if ((r.origemVeiculo === 1 || r.origemVeiculo === 2) && !plates503.has(r.placa)) {
       e517.push({ ...ctx, msg: `Veículo abastecido com origem ${r.origemVeiculo} (próprio/cedido) precisa aparecer no layout 503.` });
     }

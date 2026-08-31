@@ -1082,12 +1082,34 @@ input[type="month"]::-webkit-calendar-picker-indicator {
 }
 
 .exp-issues-wrap { margin-bottom: var(--s-4); }
+.exp-issues-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--danger); border-color: var(--danger);
+}
+.exp-issues-toggle:hover:not(:disabled) {
+  background: var(--danger); color: #fff;
+}
+.exp-issues-toggle > span:first-child {
+  display: inline-flex; width: 14px; height: 14px;
+}
 .exp-issues {
   max-height: 0;
   overflow: hidden;
   transition: max-height .25s ease, margin-top .25s ease;
 }
 .exp-issues.open { max-height: 600px; overflow-y: auto; margin-top: var(--s-3); }
+.exp-issue-line {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
 .exp-issue-group {
   background: var(--surface-alt);
   border-left: 3px solid var(--danger);
