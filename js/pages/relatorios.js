@@ -17,10 +17,12 @@ let _supplierFuels = [];
 let _depts = [];
 let _fuels = [];
 let _fuelSubs = [];
+let _origins = [];
 
 let _filter = {
   from: '', to: '',
   dept: '', vehicle: '', supplier: '', fuel: '',
+  origin: '', // código vehicle_origin (1 próprio, 2 cedido, 3 locado, 4 sublocado, 9 outras)
   type: '', // '' = ambos, 'fueling' = só abast., 'maintenance' = só manut.
 };
 
@@ -56,7 +58,7 @@ export async function renderRelatorios() {
 }
 
 async function loadAll() {
-  const [f, m, v, s, sf, d, ft, fs] = await Promise.all([
+  const [f, m, v, s, sf, d, ft, fs, o] = await Promise.all([
     supabase.from('fueling').select(`
       id, vehicle_id, supplier_id, fuel_type_code, fuel_subtype_id,
       date, quantity, unit_price, total, km_initial, km_final,
@@ -81,6 +83,7 @@ async function loadAll() {
     supabase.from('department').select('id, acronym, name').order('acronym'),
     supabase.from('fuel_type').select('code, description').order('code'),
     supabase.from('fuel_subtype').select('id, fuel_type_code, description, active').eq('active', true),
+    supabase.from('vehicle_origin').select('code, description').order('code'),
   ]);
   if (f.error) toast('Erro: ' + f.error.message, 'error');
   _fueling = f.data || [];
@@ -91,6 +94,7 @@ async function loadAll() {
   _depts = d.data || [];
   _fuels = ft.data || [];
   _fuelSubs = fs.data || [];
+  _origins = o.data || [];
 }
 
 // =============================================================================
@@ -127,6 +131,7 @@ function renderFilterCard() {
         </div>
         <div class="field"><label class="field-label">Secretaria</label><select class="select" id="rf-dept"><option value="">Todas</option></select></div>
         <div class="field"><label class="field-label">Veículo</label><select class="select" id="rf-veh"><option value="">Todos</option></select></div>
+        <div class="field"><label class="field-label">Origem</label><select class="select" id="rf-origin"><option value="">Todas</option></select></div>
         <div class="field"><label class="field-label">Fornecedor</label><select class="select" id="rf-sup"><option value="">Todos</option></select></div>
         <div class="field"><label class="field-label">Combustível</label><select class="select" id="rf-fuel"><option value="">Todos</option></select></div>
         <div class="field"><label class="field-label" style="visibility:hidden">_</label><button class="btn btn-outline" id="rf-clear" style="width:100%">Limpar filtros</button></div>
@@ -138,22 +143,24 @@ function renderFilterCard() {
   document.getElementById('rf-veh').innerHTML += _vehicles.map(v => `<option value="${v.id}">${esc(formatPlate(v.plate))} — ${esc(v.model)}</option>`).join('');
   document.getElementById('rf-sup').innerHTML += _suppliers.map(s => `<option value="${s.id}">${esc(supplierOptionLabel(s))}</option>`).join('');
   document.getElementById('rf-fuel').innerHTML += _fuels.map(f => `<option value="${f.code}">${esc(f.description)}</option>`).join('');
+  document.getElementById('rf-origin').innerHTML += _origins.map(o => `<option value="${o.code}">${esc(o.description)}</option>`).join('');
 
   if (_filter.dept) document.getElementById('rf-dept').value = _filter.dept;
   if (_filter.vehicle) document.getElementById('rf-veh').value = _filter.vehicle;
   if (_filter.supplier) document.getElementById('rf-sup').value = _filter.supplier;
   if (_filter.fuel) document.getElementById('rf-fuel').value = _filter.fuel;
+  if (_filter.origin) document.getElementById('rf-origin').value = _filter.origin;
   if (_filter.type) document.getElementById('rf-type').value = _filter.type;
 
-  ['rf-from', 'rf-to', 'rf-dept', 'rf-veh', 'rf-sup', 'rf-fuel', 'rf-type'].forEach(id => {
+  ['rf-from', 'rf-to', 'rf-dept', 'rf-veh', 'rf-sup', 'rf-fuel', 'rf-origin', 'rf-type'].forEach(id => {
     document.getElementById(id).addEventListener('change', (e) => {
-      const map = { 'rf-from': 'from', 'rf-to': 'to', 'rf-dept': 'dept', 'rf-veh': 'vehicle', 'rf-sup': 'supplier', 'rf-fuel': 'fuel', 'rf-type': 'type' };
+      const map = { 'rf-from': 'from', 'rf-to': 'to', 'rf-dept': 'dept', 'rf-veh': 'vehicle', 'rf-sup': 'supplier', 'rf-fuel': 'fuel', 'rf-origin': 'origin', 'rf-type': 'type' };
       _filter[map[id]] = e.target.value;
       render();
     });
   });
   document.getElementById('rf-clear').addEventListener('click', () => {
-    _filter = { from: '', to: '', dept: '', vehicle: '', supplier: '', fuel: '', type: '' };
+    _filter = { from: '', to: '', dept: '', vehicle: '', supplier: '', fuel: '', origin: '', type: '' };
     renderFilterCard();
     render();
   });
@@ -170,6 +177,7 @@ function renderSummary(k) {
   if (_filter.type === 'maintenance') parts.push('🎯 Só manutenções');
   if (_filter.dept)    parts.push('🏛️ ' + (_depts.find(d => d.id === _filter.dept)?.acronym || ''));
   if (_filter.vehicle) parts.push('🚗 ' + formatPlate(_vehicles.find(v => v.id === _filter.vehicle)?.plate || ''));
+  if (_filter.origin)  parts.push('🔖 ' + (_origins.find(o => String(o.code) === String(_filter.origin))?.description || ''));
   if (_filter.supplier) {
     const s = _suppliers.find(x => x.id === _filter.supplier);
     if (s) parts.push('🏪 ' + supplierOptionLabel(s));
@@ -194,6 +202,14 @@ function inDateRange(d) {
   if (_filter.to && d > _filter.to) return false;
   return true;
 }
+/** Filtros estruturais do veículo (secretaria + origem). Usado tanto pra
+ *  recortar registros (abast./manut. via vehicle_id) quanto pra recortar a
+ *  base de cadastros nas agregações por veículo. */
+function vehicleMatchesFilter(v) {
+  if (_filter.dept && v?.department_id !== _filter.dept) return false;
+  if (_filter.origin && String(v?.vehicle_origin_code) !== String(_filter.origin)) return false;
+  return true;
+}
 function filteredFueling() {
   if (_filter.type === 'maintenance') return [];
   return _fueling.filter(a => {
@@ -201,9 +217,8 @@ function filteredFueling() {
     if (_filter.supplier && a.supplier_id !== _filter.supplier) return false;
     if (_filter.vehicle && a.vehicle_id !== _filter.vehicle) return false;
     if (_filter.fuel && String(a.fuel_type_code) !== String(_filter.fuel)) return false;
-    if (_filter.dept) {
-      const v = _vehicles.find(x => x.id === a.vehicle_id);
-      if (v?.department_id !== _filter.dept) return false;
+    if (_filter.dept || _filter.origin) {
+      if (!vehicleMatchesFilter(_vehicles.find(x => x.id === a.vehicle_id))) return false;
     }
     return true;
   });
@@ -214,9 +229,8 @@ function filteredMaintenance() {
     if (!inDateRange(a.open_date)) return false;
     if (_filter.supplier && a.supplier_id !== _filter.supplier) return false;
     if (_filter.vehicle && a.vehicle_id !== _filter.vehicle) return false;
-    if (_filter.dept) {
-      const v = _vehicles.find(x => x.id === a.vehicle_id);
-      if (v?.department_id !== _filter.dept) return false;
+    if (_filter.dept || _filter.origin) {
+      if (!vehicleMatchesFilter(_vehicles.find(x => x.id === a.vehicle_id))) return false;
     }
     return true;
   });
@@ -241,7 +255,7 @@ function aggByVehicle(abs, man) {
   const acc = new Map();
   _vehicles.forEach(v => {
     if (_filter.vehicle && v.id !== _filter.vehicle) return;
-    if (_filter.dept && v.department_id !== _filter.dept) return;
+    if (!vehicleMatchesFilter(v)) return;
     acc.set(v.id, {
       id: v.id, plate: v.plate, model: v.model,
       dept: v.department?.acronym || '—',
