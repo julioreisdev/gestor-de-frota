@@ -5,7 +5,7 @@
   "lang": "pt-BR",
   "start_url": "./",
   "scope": "./",
-  "id": "/gerir-frota-jurema/",
+  "id": "/gerir-frota-abreu/",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
   "orientation": "portrait",
