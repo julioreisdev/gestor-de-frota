@@ -22,6 +22,7 @@ let _maintenance = [];
 let _fAuth = [];
 let _sAuth = [];
 let _users = [];
+let _unbilled = null;   // resumo do faturamento pendente
 let _filter = { from: '', to: '' };
 let _charts = [];
 
@@ -98,6 +99,16 @@ async function loadAll() {
   _fAuth = fa.data || [];
   _sAuth = sa.data || [];
   _users = u.data || [];
+
+  // Faturamento: abastecimentos de meses encerrados ainda sem Ordem de Fornecimento.
+  // Tolerante: se o banco ainda não tem a função, o painel segue sem o aviso.
+  _unbilled = null;
+  if (['admin', 'usuario'].includes(getProfile()?.role)) {
+    try {
+      const r = await supabase.rpc('billing_unbilled_summary');
+      if (!r.error) _unbilled = (r.data || [])[0] || null;
+    } catch { /* sem aviso */ }
+  }
 }
 
 // =============================================================================
@@ -317,11 +328,24 @@ function renderAlerts() {
     });
   }
 
+  // 5) Abastecimentos de meses encerrados sem Ordem de Fornecimento
+  if (_unbilled?.fuelings > 0) {
+    const litros = Number(_unbilled.liters || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    alerts.push({
+      level: 'warning',
+      icon: `<span style="display:inline-flex;width:20px;height:20px">${icons.receipt}</span>`,
+      title: `${_unbilled.fuelings} abastecimento(s) sem Ordem de Fornecimento`,
+      msg: `${litros} L em ${_unbilled.contracts} contrato(s), de meses já encerrados. O mais antigo é de ${fmtDate(_unbilled.oldest)}.`,
+      link: '#/faturamento',
+      attrs: 'data-billing-tab="new"',
+    });
+  }
+
   if (!alerts.length) return '';
   return `
     <div class="dash-alerts">
       ${alerts.map(a => `
-        <a href="${esc(a.link)}" class="dash-alert dash-alert-${a.level}">
+        <a href="${esc(a.link)}" class="dash-alert dash-alert-${a.level}" ${a.attrs || ''}>
           <div class="dash-alert-icon">${a.icon}</div>
           <div class="dash-alert-body">
             <div class="dash-alert-title">${esc(a.title)}</div>

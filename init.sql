@@ -2714,6 +2714,85 @@ revoke all on function cancel_supply_order(uuid, text) from public;
 grant execute on function cancel_supply_order(uuid, text) to authenticated;
 
 -- =============================================================================
+-- 16) FATURAMENTO — Parte 3: leitura para as telas e para o PDF da OF
+-- Idempotente.
+-- =============================================================================
+
+-- Abastecimentos de uma OF (ativa ou cancelada), para a tela e para o anexo do
+-- PDF. Vem do histórico, então funciona também depois do cancelamento.
+-- Só devolve linhas a quem pode ver a ordem.
+create or replace function supply_order_fuelings(p_order uuid)
+returns table (
+  fueling_id uuid, fueling_date date, authorization_number text,
+  vehicle_id uuid, plate text, vehicle_model text, vehicle_type_code smallint,
+  fuel_type_code smallint, fuel_subtype_id smallint, fuel_label text,
+  liters numeric, km_initial integer, km_final integer
+)
+language plpgsql stable security definer set search_path = public, auth as $$
+#variable_conflict use_column
+declare v_o supply_order%rowtype; v_role user_role;
+begin
+  select * into v_o from supply_order o where o.id = p_order;
+  if v_o.id is null then return; end if;
+  v_role := current_user_role();
+  if v_role = 'admin' then null;
+  elsif v_role = 'usuario' then
+    if current_user_department_id() is not null
+       and current_user_department_id() is distinct from v_o.department_id then return; end if;
+  elsif v_role = 'fornecedor' then
+    if v_o.supplier_id not in (select current_user_supplier_ids()) then return; end if;
+  else
+    return;
+  end if;
+  return query
+    select f.id, f.date, a.number,
+           f.vehicle_id, f.vehicle_plate_snapshot, v.model, v.vehicle_type_code,
+           f.fuel_type_code, f.fuel_subtype_id,
+           upper(coalesce(fs.description, ft.description)),
+           f.quantity, f.km_initial, f.km_final
+      from supply_order_fueling sf
+      join fueling f on f.id = sf.fueling_id
+      join vehicle v on v.id = f.vehicle_id
+      join fuel_type ft on ft.code = f.fuel_type_code
+      left join fuel_subtype fs on fs.id = f.fuel_subtype_id
+      left join fueling_authorization a on a.id = f.authorization_id
+     where sf.supply_order_id = p_order
+     order by f.date, a.number nulls last, f.created_at;
+end;
+$$;
+revoke all on function supply_order_fuelings(uuid) from public;
+grant execute on function supply_order_fuelings(uuid) to authenticated;
+
+-- Aviso do painel: abastecimentos de meses já encerrados ainda sem OF.
+create or replace function billing_unbilled_summary()
+returns table (fuelings integer, liters numeric, contracts integer, oldest date)
+language plpgsql stable security definer set search_path = public, auth as $$
+#variable_conflict use_column
+declare v_role user_role; v_dept uuid; v_start date;
+begin
+  v_role := current_user_role();
+  if v_role is null or v_role not in ('admin','usuario') then return; end if;
+  if v_role = 'usuario' then v_dept := current_user_department_id(); end if;
+  select e.billing_start_date into v_start from entity e where e.id = 1;
+  if v_start is null then return; end if;
+  return query
+    select count(*)::integer, coalesce(sum(f.quantity), 0)::numeric,
+           count(distinct f.supplier_id)::integer, min(f.date)
+      from fueling f
+      join supplier s on s.id = f.supplier_id
+     where f.deleted_at is null
+       and f.supply_order_id is null
+       and f.date >= v_start
+       and f.date < date_trunc('month', current_date)::date
+       and s.kind in ('posto','ambos')
+       and s.department_id is not null
+       and (v_dept is null or s.department_id = v_dept);
+end;
+$$;
+revoke all on function billing_unbilled_summary() from public;
+grant execute on function billing_unbilled_summary() to authenticated;
+
+-- =============================================================================
 -- 13) Força reload do schema cache do PostgREST
 -- =============================================================================
 notify pgrst, 'reload schema';

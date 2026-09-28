@@ -1,6 +1,6 @@
 import { pageRoot, pageHeader, getEntity } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel, supplierCellHTML } from '../ui.js';
+import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel, supplierCellHTML, isMissingColumn } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 import { openPrintTab } from '../thermal.js';
@@ -13,7 +13,10 @@ let _fuels = [];
 let _fuelSubs = [];
 let _depts = [];
 let _emittedAuths = []; // só as 'emitida' pra import
-let _filter = { search: '', vehicle: '', dept: '', supplier: '', fuel: '', month: '' };
+let _filter = { search: '', vehicle: '', dept: '', supplier: '', fuel: '', month: '', billing: '' };
+// false quando o banco ainda não recebeu o apply.sql do faturamento
+let _hasBilling = true;
+const LOCKED_MSG = (a) => `Este abastecimento faz parte da Ordem de Fornecimento ${a.supply_order?.number || ''}. Para alterar, cancele a ordem em Faturamento.`;
 
 // =============================================================================
 // PÁGINA
@@ -55,6 +58,11 @@ export async function renderAbastecimentos() {
         <select class="select chip" id="ff-sup"><option value="">Todos fornecedores</option></select>
         <select class="select chip" id="ff-fuel"><option value="">Todos combustíveis</option></select>
         <input class="input chip" type="month" id="ff-month" value="${esc(_filter.month)}">
+        <select class="select chip" id="ff-billing" hidden>
+          <option value="">Com e sem ordem</option>
+          <option value="without">Sem Ordem de Fornecimento</option>
+          <option value="with">Com Ordem de Fornecimento</option>
+        </select>
         <button class="btn btn-ghost btn-sm" id="ff-clear" hidden>Limpar filtros</button>
       </div>
       <div id="abs-tablebox">
@@ -84,9 +92,10 @@ export async function renderAbastecimentos() {
   document.getElementById('ff-sup').addEventListener('change',  e => { _filter.supplier = e.target.value; updateClear(); renderTable(); renderStats(); });
   document.getElementById('ff-fuel').addEventListener('change', e => { _filter.fuel     = e.target.value; updateClear(); renderTable(); renderStats(); });
   document.getElementById('ff-month').addEventListener('change',e => { _filter.month    = e.target.value; updateClear(); renderTable(); renderStats(); });
+  document.getElementById('ff-billing').addEventListener('change',e => { _filter.billing = e.target.value; updateClear(); renderTable(); renderStats(); });
   document.getElementById('ff-clear').addEventListener('click', () => {
-    _filter = { search: _filter.search, vehicle: '', dept: '', supplier: '', fuel: '', month: '' };
-    ['ff-veh', 'ff-dept', 'ff-sup', 'ff-fuel', 'ff-month'].forEach(id => document.getElementById(id).value = '');
+    _filter = { search: _filter.search, vehicle: '', dept: '', supplier: '', fuel: '', month: '', billing: '' };
+    ['ff-veh', 'ff-dept', 'ff-sup', 'ff-fuel', 'ff-month', 'ff-billing'].forEach(id => document.getElementById(id).value = '');
     updateClear(); renderTable(); renderStats();
   });
 
@@ -97,20 +106,23 @@ export async function renderAbastecimentos() {
 }
 
 function updateClear() {
-  const any = _filter.vehicle || _filter.dept || _filter.supplier || _filter.fuel || _filter.month;
+  const any = _filter.vehicle || _filter.dept || _filter.supplier || _filter.fuel || _filter.month || _filter.billing;
   document.getElementById('ff-clear').hidden = !any;
 }
 
-async function loadAll() {
-  const [a, v, s, sf, ft, fs, d, ea] = await Promise.all([
-    supabase.from('fueling').select(`
+const FUELING_COLS = `
       id, authorization_id, vehicle_id, supplier_id, fuel_type_code, fuel_subtype_id,
       date, quantity, unit_price, total, km_initial, km_final,
       responsible_name, notes,
       vehicle_plate_snapshot, department_acronym_snapshot, supplier_trade_name_snapshot,
       created_at,
-      authorization:authorization_id(number)
-    `).is('deleted_at', null).order('date', { ascending: false }).order('created_at', { ascending: false }),
+      authorization:authorization_id(number)`;
+const fuelingQuery = (cols) => supabase.from('fueling').select(cols)
+  .is('deleted_at', null).order('date', { ascending: false }).order('created_at', { ascending: false });
+
+async function loadAll() {
+  let [a, v, s, sf, ft, fs, d, ea] = await Promise.all([
+    fuelingQuery(FUELING_COLS + ', supply_order_id, supply_order:supply_order_id(number)'),
     supabase.from('vehicle').select(`
       id, plate, model, brand, current_km, tank_capacity, fuel_type_code, fuel_subtype_id,
       department_id, department:department_id(acronym, name)
@@ -129,6 +141,11 @@ async function loadAll() {
       vehicle_plate_snapshot, vehicle_model_snapshot, supplier_trade_name_snapshot
     `).eq('status', 'emitida').is('deleted_at', null).order('date', { ascending: false }),
   ]);
+  _hasBilling = true;
+  if (a.error && (isMissingColumn(a.error) || /supply_order/i.test(a.error.message || ''))) {
+    _hasBilling = false;
+    a = await fuelingQuery(FUELING_COLS);
+  }
   if (a.error) { toast('Falha ao carregar abastecimentos: ' + a.error.message, 'error'); _items = []; }
   else _items = a.data || [];
   _vehicles = v.data || [];
@@ -153,6 +170,10 @@ function fillFilterSelects() {
   if (_filter.dept)    document.getElementById('ff-dept').value = _filter.dept;
   if (_filter.supplier) document.getElementById('ff-sup').value = _filter.supplier;
   if (_filter.fuel)    document.getElementById('ff-fuel').value = _filter.fuel;
+  const fb = document.getElementById('ff-billing');
+  fb.hidden = !_hasBilling;
+  if (!_hasBilling) _filter.billing = '';
+  fb.value = _filter.billing;
   updateClear();
 }
 
@@ -171,6 +192,8 @@ function applyFilters() {
     if (_filter.supplier && a.supplier_id !== _filter.supplier) return false;
     if (_filter.fuel && String(a.fuel_type_code) !== String(_filter.fuel)) return false;
     if (_filter.month && String(a.date).slice(0, 7) !== _filter.month) return false;
+    if (_filter.billing === 'with' && !a.supply_order_id) return false;
+    if (_filter.billing === 'without' && a.supply_order_id) return false;
     if (_filter.dept) {
       const veh = _vehicles.find(x => x.id === a.vehicle_id);
       if (veh?.department_id !== _filter.dept) return false;
@@ -210,7 +233,7 @@ function renderTable() {
   }
   const filtered = applyFilters();
   if (countEl) {
-    const any = _filter.search || _filter.vehicle || _filter.dept || _filter.supplier || _filter.fuel || _filter.month;
+    const any = _filter.search || _filter.vehicle || _filter.dept || _filter.supplier || _filter.fuel || _filter.month || _filter.billing;
     countEl.textContent = any ? `${filtered.length} de ${_items.length} registro(s)` : `${_items.length} registro(s)`;
   }
   if (!filtered.length) {
@@ -254,6 +277,7 @@ function absRow(a) {
   const origin = a.authorization?.number
     ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:10.5px">${esc(a.authorization.number)}</span>`
     : `<span class="badge badge-neutral">manual</span>`;
+  const locked = !!a.supply_order_id;
   return `
     <tr>
       <td data-label="Data" style="white-space:nowrap">${esc(fmtDate(a.date))}</td>
@@ -264,11 +288,13 @@ function absRow(a) {
       <td data-label="Total" style="white-space:nowrap;color:var(--success);font-weight:500">${fmtMoney(a.total)}</td>
       <td data-label="KM">${km}</td>
       <td data-label="Fornecedor">${supplierCellHTML(a.supplier_trade_name_snapshot, _suppliers.find(s => s.id === a.supplier_id))}</td>
-      <td data-label="Origem">${origin}</td>
+      <td data-label="Origem">${locked
+        ? `<div class="cell-stack">${origin}<span class="badge badge-success" title="${esc(LOCKED_MSG(a))}">OF ${esc(a.supply_order?.number || '')}</span></div>`
+        : origin}</td>
       <td class="actions-col">
         <div class="actions-row">
-          <button class="btn btn-ghost btn-icon btn-sm" data-act="edit" data-id="${a.id}" title="Editar">${icons.edit}</button>
-          ${isAdmin() ? `<button class="btn btn-ghost btn-icon btn-sm" data-act="delete" data-id="${a.id}" title="Excluir" style="color:var(--danger)">${icons.trash}</button>` : ''}
+          <button class="btn btn-ghost btn-icon btn-sm" data-act="edit" data-id="${a.id}" ${locked ? `disabled title="${esc(LOCKED_MSG(a))}"` : 'title="Editar"'}>${icons.edit}</button>
+          ${isAdmin() ? `<button class="btn btn-ghost btn-icon btn-sm" data-act="delete" data-id="${a.id}" ${locked ? `disabled title="${esc(LOCKED_MSG(a))}"` : 'title="Excluir"'} style="color:var(--danger)">${icons.trash}</button>` : ''}
         </div>
       </td>
     </tr>`;
@@ -350,6 +376,7 @@ function openImportModal() {
 function openAbsModal(id, fromAuth = null) {
   const editing = !!id;
   const a = editing ? _items.find(x => x.id === id) : null;
+  if (a?.supply_order_id) { toast(LOCKED_MSG(a), 'warning', 6000); return; }
   const me = getProfile();
   const today = new Date().toISOString().slice(0, 10);
 
@@ -640,6 +667,7 @@ async function saveAbs(id, initial) {
 async function deleteAbs(id) {
   const a = _items.find(x => x.id === id);
   if (!a) return;
+  if (a.supply_order_id) { toast(LOCKED_MSG(a), 'warning', 6000); return; }
   const linked = a.authorization?.number ? ` (vinculado à autorização ${a.authorization.number})` : '';
   const ok = await confirmDialog({
     title: 'Excluir abastecimento',

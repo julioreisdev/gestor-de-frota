@@ -20,7 +20,7 @@ export const NAV = [
   { path: '/autorizacoes',   label: 'Autorizações',     icon: 'clipboard',  roles: ['admin','usuario','fornecedor'] },
   { path: '/abastecimentos', label: 'Abastecimentos',   icon: 'droplet',    roles: ['admin','usuario'] },
   { path: '/manutencoes',    label: 'Manutenções',      icon: 'wrench',     roles: ['admin','usuario'] },
-  { path: '/faturamento',    label: 'Faturamento',      icon: 'receipt',    roles: ['admin'] },
+  { path: '/faturamento',    label: 'Faturamento',      icon: 'receipt',    roles: ['admin','usuario','fornecedor'] },
   { group: 'Análise' },
   { path: '/relatorios',     label: 'Relatórios',       icon: 'barChart',   roles: ['admin','usuario'] },
   { path: '/exportacao',     label: 'Exportação TCE',   icon: 'download',   roles: ['admin','usuario'] },
