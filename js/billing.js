@@ -31,6 +31,38 @@ export const ORDER_STATUS = {
   cancelada: { label: 'Cancelada', badge: 'badge badge-danger' },
 };
 
+export const TERM_STATUS = {
+  emitido:   { label: 'Emitido',   badge: 'badge badge-success' },
+  cancelado: { label: 'Cancelado', badge: 'badge badge-danger' },
+};
+
+// ---- Cálculo do termo: inteiros, nunca ponto flutuante; meio para cima ----
+// O banco faz a mesma conta e é quem grava; a tela só mostra em tempo real.
+
+/** "6,23", "6.23" ou 6.23 → milésimos de real (6230). null se não for número. */
+export function priceToMilli(v) {
+  const s = String(v ?? '').trim().replace(',', '.');
+  if (!/^\d{1,5}(\.\d+)?$/.test(s)) return null;
+  const [int, dec = ''] = s.split('.');
+  const d = (dec + '0000').slice(0, 4);             // a 4ª casa decide o arredondamento
+  return Number(int) * 1000 + Number(d.slice(0, 3)) + (Number(d[3]) >= 5 ? 1 : 0);
+}
+/** Valor com 2 casas (litros ou reais) → centésimos inteiros. null se não for número. */
+export function toCenti(v) {
+  const s = String(v ?? '').trim().replace(',', '.');
+  if (!/^\d+(\.\d+)?$/.test(s)) return null;
+  const [int, dec = ''] = s.split('.');
+  const d = (dec + '000').slice(0, 3);
+  return Number(int) * 100 + Number(d.slice(0, 2)) + (Number(d[2]) >= 5 ? 1 : 0);
+}
+/** R1 e R2: ROUND(litros × preço, 2), em centavos. */
+export function amountCents(liters, priceMilli) {
+  const l = toCenti(liters);
+  if (l == null || priceMilli == null) return null;
+  return Number((BigInt(l) * BigInt(priceMilli) + 500n) / 1000n);
+}
+export const fmtCents = (c) => fmtAmount((c || 0) / 100);
+
 /** Tabela ou função do faturamento ainda não existe: o apply.sql não foi executado. */
 export function isBillingMissing(err) {
   const msg = err?.message || '';

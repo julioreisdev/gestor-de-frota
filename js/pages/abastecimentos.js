@@ -16,7 +16,9 @@ let _emittedAuths = []; // só as 'emitida' pra import
 let _filter = { search: '', vehicle: '', dept: '', supplier: '', fuel: '', month: '', billing: '' };
 // false quando o banco ainda não recebeu o apply.sql do faturamento
 let _hasBilling = true;
-const LOCKED_MSG = (a) => `Este abastecimento faz parte da Ordem de Fornecimento ${a.supply_order?.number || ''}. Para alterar, cancele a ordem em Faturamento.`;
+const LOCKED_MSG = (a) => a.supply_order?.status === 'faturada'
+  ? `Este abastecimento faz parte da Ordem de Fornecimento ${a.supply_order?.number || ''}, que já tem Termo de Recebimento. Para alterar, cancele o termo e depois a ordem em Faturamento.`
+  : `Este abastecimento faz parte da Ordem de Fornecimento ${a.supply_order?.number || ''}. Para alterar, cancele a ordem em Faturamento.`;
 
 // =============================================================================
 // PÁGINA
@@ -122,7 +124,7 @@ const fuelingQuery = (cols) => supabase.from('fueling').select(cols)
 
 async function loadAll() {
   let [a, v, s, sf, ft, fs, d, ea] = await Promise.all([
-    fuelingQuery(FUELING_COLS + ', supply_order_id, supply_order:supply_order_id(number)'),
+    fuelingQuery(FUELING_COLS + ', supply_order_id, supply_order:supply_order_id(number, status)'),
     supabase.from('vehicle').select(`
       id, plate, model, brand, current_km, tank_capacity, fuel_type_code, fuel_subtype_id,
       department_id, department:department_id(acronym, name)

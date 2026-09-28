@@ -283,13 +283,92 @@ create table if not exists supply_order_item (               -- um por combustí
 );
 create index if not exists ix_supply_order_item_order on supply_order_item (supply_order_id);
 
--- Histórico: quais abastecimentos a OF levou. Fica mesmo depois de cancelada.
+-- Histórico: quais abastecimentos a OF levou, com cópia dos dados no dia da
+-- emissão. Fica mesmo depois de a OF ser cancelada e de o abastecimento ser
+-- corrigido ou excluído: reimprimir a ordem dá sempre o mesmo documento.
 create table if not exists supply_order_fueling (
+  id uuid primary key default gen_random_uuid(),
   supply_order_id uuid not null references supply_order(id),
-  fueling_id uuid not null references fueling(id),
-  primary key (supply_order_id, fueling_id)
+  fueling_id uuid references fueling(id) on delete set null,
+  line_no integer not null,                                 -- ordem no anexo (data, autorização)
+  fueling_date date not null,
+  authorization_number text,                                -- nulo = abastecimento manual
+  vehicle_id uuid,
+  plate text not null,
+  vehicle_model text,
+  vehicle_type_code smallint,
+  fuel_type_code smallint not null,
+  fuel_subtype_id smallint,
+  fuel_label text not null,
+  liters numeric(8,2) not null,
+  unit_price numeric(8,3),                                  -- preço do abastecimento na emissão da OF
+  km_initial integer,
+  km_final integer
 );
+
+-- Quem criou a tabela na versão anterior (só os dois ids): converte e preenche.
+do $$ begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'supply_order_fueling' and column_name = 'id') then
+    alter table supply_order_fueling
+      add column id uuid not null default gen_random_uuid(),
+      add column line_no integer,
+      add column fueling_date date,
+      add column authorization_number text,
+      add column vehicle_id uuid,
+      add column plate text,
+      add column vehicle_model text,
+      add column vehicle_type_code smallint,
+      add column fuel_type_code smallint,
+      add column fuel_subtype_id smallint,
+      add column fuel_label text,
+      add column liters numeric(8,2),
+      add column unit_price numeric(8,3),
+      add column km_initial integer,
+      add column km_final integer;
+
+    update supply_order_fueling sf
+       set line_no = x.line_no, fueling_date = x.date, authorization_number = x.number,
+           vehicle_id = x.vehicle_id, plate = x.plate, vehicle_model = x.model,
+           vehicle_type_code = x.vehicle_type_code, fuel_type_code = x.fuel_type_code,
+           fuel_subtype_id = x.fuel_subtype_id, fuel_label = x.fuel_label,
+           liters = x.quantity, unit_price = x.unit_price,
+           km_initial = x.km_initial, km_final = x.km_final
+      from (
+        select h.supply_order_id, h.fueling_id,
+               row_number() over (partition by h.supply_order_id
+                                  order by f.date, a.number nulls last, f.created_at, f.id)::integer as line_no,
+               f.date, a.number, f.vehicle_id, f.vehicle_plate_snapshot as plate, v.model,
+               v.vehicle_type_code, f.fuel_type_code, f.fuel_subtype_id,
+               upper(coalesce(fs.description, ft.description)) as fuel_label,
+               f.quantity, f.unit_price, f.km_initial, f.km_final
+          from supply_order_fueling h
+          join fueling f on f.id = h.fueling_id
+          join vehicle v on v.id = f.vehicle_id
+          join fuel_type ft on ft.code = f.fuel_type_code
+          left join fuel_subtype fs on fs.id = f.fuel_subtype_id
+          left join fueling_authorization a on a.id = f.authorization_id
+      ) x
+     where sf.supply_order_id = x.supply_order_id and sf.fueling_id = x.fueling_id;
+
+    alter table supply_order_fueling drop constraint supply_order_fueling_pkey;
+    alter table supply_order_fueling add primary key (id);
+    alter table supply_order_fueling drop constraint if exists supply_order_fueling_fueling_id_fkey;
+    alter table supply_order_fueling
+      alter column fueling_id drop not null,
+      alter column line_no set not null,
+      alter column fueling_date set not null,
+      alter column plate set not null,
+      alter column fuel_type_code set not null,
+      alter column fuel_label set not null,
+      alter column liters set not null,
+      add constraint supply_order_fueling_fueling_id_fkey
+        foreign key (fueling_id) references fueling(id) on delete set null;
+  end if;
+end $$;
+create unique index if not exists ux_supply_order_fueling on supply_order_fueling (supply_order_id, fueling_id);
 create index if not exists ix_supply_order_fueling_fueling on supply_order_fueling (fueling_id);
+create index if not exists ix_supply_order_fueling_order on supply_order_fueling (supply_order_id, line_no);
 
 -- Vínculo ativo do abastecimento com a OF
 alter table fueling add column if not exists supply_order_id uuid references supply_order(id);
@@ -332,13 +411,17 @@ create policy p_sof_read on supply_order_fueling for select
 -- só muda pelas funções de faturamento (que ligam a chave abaixo na transação).
 create or replace function fueling_billing_lock() returns trigger
 language plpgsql as $$
-declare v_number text;
+declare v_number text; v_status supply_order_status;
 begin
   if current_setting('gerirfrota.billing_bypass', true) = '1' then
     return coalesce(new, old);
   end if;
   if old.supply_order_id is not null then
-    select number into v_number from supply_order where id = old.supply_order_id;
+    select number, status into v_number, v_status from supply_order where id = old.supply_order_id;
+    if v_status = 'faturada' then
+      raise exception 'Este abastecimento faz parte da Ordem de Fornecimento %, que já tem Termo de Recebimento. Para alterar, cancele o termo e depois a ordem.', coalesce(v_number, '')
+        using errcode = 'P0001';
+    end if;
     raise exception 'Este abastecimento faz parte da Ordem de Fornecimento %. Para alterar, cancele a ordem.', coalesce(v_number, '')
       using errcode = 'P0001';
   end if;
@@ -570,8 +653,23 @@ begin
      where f.id = any(v_ids)
      group by f.fuel_type_code, f.fuel_subtype_id;
 
-  insert into supply_order_fueling (supply_order_id, fueling_id)
-    select v_id, x from unnest(v_ids) x;
+  insert into supply_order_fueling (
+    supply_order_id, fueling_id, line_no, fueling_date, authorization_number,
+    vehicle_id, plate, vehicle_model, vehicle_type_code,
+    fuel_type_code, fuel_subtype_id, fuel_label, liters, unit_price, km_initial, km_final)
+    select v_id, f.id,
+           row_number() over (order by f.date, a.number nulls last, f.created_at, f.id),
+           f.date, a.number,
+           f.vehicle_id, f.vehicle_plate_snapshot, v.model, v.vehicle_type_code,
+           f.fuel_type_code, f.fuel_subtype_id,
+           upper(coalesce(fs.description, ft.description)),
+           f.quantity, f.unit_price, f.km_initial, f.km_final
+      from fueling f
+      join vehicle v on v.id = f.vehicle_id
+      join fuel_type ft on ft.code = f.fuel_type_code
+      left join fuel_subtype fs on fs.id = f.fuel_subtype_id
+      left join fueling_authorization a on a.id = f.authorization_id
+     where f.id = any(v_ids);
 
   perform set_config('gerirfrota.billing_bypass', '1', true);
   update fueling set supply_order_id = v_id where id = any(v_ids);
@@ -637,14 +735,16 @@ grant execute on function cancel_supply_order(uuid, text) to authenticated;
 -- =============================================================================
 
 -- Abastecimentos de uma OF (ativa ou cancelada), para a tela e para o anexo do
--- PDF. Vem do histórico, então funciona também depois do cancelamento.
+-- PDF. Vem da cópia gravada no histórico: não muda depois da emissão.
 -- Só devolve linhas a quem pode ver a ordem.
+drop function if exists supply_order_fuelings(uuid);
 create or replace function supply_order_fuelings(p_order uuid)
 returns table (
   fueling_id uuid, fueling_date date, authorization_number text,
   vehicle_id uuid, plate text, vehicle_model text, vehicle_type_code smallint,
   fuel_type_code smallint, fuel_subtype_id smallint, fuel_label text,
-  liters numeric, km_initial integer, km_final integer
+  liters numeric, km_initial integer, km_final integer,
+  unit_price numeric, line_no integer
 )
 language plpgsql stable security definer set search_path = public, auth as $$
 #variable_conflict use_column
@@ -663,19 +763,14 @@ begin
     return;
   end if;
   return query
-    select f.id, f.date, a.number,
-           f.vehicle_id, f.vehicle_plate_snapshot, v.model, v.vehicle_type_code,
-           f.fuel_type_code, f.fuel_subtype_id,
-           upper(coalesce(fs.description, ft.description)),
-           f.quantity, f.km_initial, f.km_final
+    select sf.fueling_id, sf.fueling_date, sf.authorization_number,
+           sf.vehicle_id, sf.plate, sf.vehicle_model, sf.vehicle_type_code,
+           sf.fuel_type_code, sf.fuel_subtype_id, sf.fuel_label,
+           sf.liters::numeric, sf.km_initial, sf.km_final,
+           sf.unit_price::numeric, sf.line_no
       from supply_order_fueling sf
-      join fueling f on f.id = sf.fueling_id
-      join vehicle v on v.id = f.vehicle_id
-      join fuel_type ft on ft.code = f.fuel_type_code
-      left join fuel_subtype fs on fs.id = f.fuel_subtype_id
-      left join fueling_authorization a on a.id = f.authorization_id
      where sf.supply_order_id = p_order
-     order by f.date, a.number nulls last, f.created_at;
+     order by sf.line_no;
 end;
 $$;
 revoke all on function supply_order_fuelings(uuid) from public;
@@ -709,6 +804,326 @@ end;
 $$;
 revoke all on function billing_unbilled_summary() from public;
 grant execute on function billing_unbilled_summary() to authenticated;
+
+-- =============================================================================
+-- 17) FATURAMENTO — Parte 4: Termo de Recebimento Definitivo
+--   Gerado a partir de uma OF emitida, quando a nota fiscal chega. O fiscal
+--   informa a nota e o preço por litro; o banco calcula e grava os valores:
+--     R1  valor do item = ROUND(litros do item × preço, 2)
+--     R2  valor de cada abastecimento = ROUND(litros × preço, 2); a diferença
+--         de centavos vai para o último abastecimento de cada combustível,
+--         para o anexo fechar com o total do termo
+--   O número do termo é o da OF. No máximo um termo ativo por OF.
+--   Ao emitir, os abastecimentos passam a valer o preço e o valor do termo;
+--   ao cancelar, voltam ao que eram.
+-- Idempotente.
+-- =============================================================================
+
+do $$ begin
+  if not exists (select 1 from pg_type where typname = 'receipt_term_status') then
+    create type receipt_term_status as enum ('emitido','cancelado');
+  end if;
+end $$;
+
+create table if not exists receipt_term (
+  id uuid primary key default gen_random_uuid(),
+  supply_order_id uuid not null references supply_order(id),
+  number text not null,                                     -- = número da OF
+  invoice_number text not null,
+  invoice_series text,
+  invoice_date date not null,
+  invoice_amount numeric(14,2) check (invoice_amount is null or invoice_amount > 0),  -- só conferência
+  issue_date date not null default current_date,
+  commitment_number text not null,                          -- empenho no dia do termo
+  fiscal_name text not null,
+  fiscal_registration text,
+  fiscal_ordinance text,
+  responsible_name_snapshot text,                           -- gestor da secretaria no dia do termo
+  responsible_role_snapshot text,
+  total_amount numeric(14,2) not null check (total_amount > 0),
+  status receipt_term_status not null default 'emitido',
+  cancel_reason text,
+  canceled_by uuid references app_user(id),
+  canceled_at timestamptz,
+  created_by uuid references app_user(id),
+  created_at timestamptz not null default now(),
+  constraint chk_rt_cancel check (status <> 'cancelado' or cancel_reason is not null)
+);
+-- no máximo 1 termo ativo por OF
+create unique index if not exists ux_receipt_term_active on receipt_term (supply_order_id) where status = 'emitido';
+create index if not exists ix_receipt_term_order on receipt_term (supply_order_id);
+
+create table if not exists receipt_term_item (                -- R1: um por combustível da OF
+  id uuid primary key default gen_random_uuid(),
+  receipt_term_id uuid not null references receipt_term(id) on delete cascade,
+  fuel_type_code smallint not null,
+  fuel_subtype_id smallint,
+  fuel_label text not null,
+  fuelings_count integer not null,
+  liters numeric(12,2) not null,
+  unit_price numeric(8,3) not null check (unit_price > 0),
+  amount numeric(14,2) not null
+);
+create index if not exists ix_receipt_term_item_term on receipt_term_item (receipt_term_id);
+
+create table if not exists receipt_term_fueling (             -- R2: valor de cada linha do Anexo I
+  receipt_term_id uuid not null references receipt_term(id) on delete cascade,
+  order_fueling_id uuid not null references supply_order_fueling(id),
+  unit_price numeric(8,3) not null,
+  amount numeric(14,2) not null,
+  primary key (receipt_term_id, order_fueling_id)
+);
+
+-- Valor faturado no abastecimento (o total do termo, já com o ajuste de centavos)
+alter table fueling add column if not exists invoiced_total numeric(12,2);
+alter table fueling add column if not exists unit_price_before_invoice numeric(8,3);
+
+grant select on receipt_term, receipt_term_item, receipt_term_fueling to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- Leitura (RLS): admin e usuário (pela secretaria da OF). Posto não vê termo.
+-- Sem política de escrita: só as funções gravam.
+-- ----------------------------------------------------------------------------
+alter table receipt_term         enable row level security;
+alter table receipt_term_item    enable row level security;
+alter table receipt_term_fueling enable row level security;
+
+drop policy if exists p_rt_read on receipt_term;
+create policy p_rt_read on receipt_term for select
+  using (
+    current_user_role() in ('admin','usuario')
+    and exists (select 1 from supply_order o where o.id = receipt_term.supply_order_id)
+  );
+drop policy if exists p_rti_read on receipt_term_item;
+create policy p_rti_read on receipt_term_item for select
+  using (exists (select 1 from receipt_term t where t.id = receipt_term_item.receipt_term_id));
+drop policy if exists p_rtf_read on receipt_term_fueling;
+create policy p_rtf_read on receipt_term_fueling for select
+  using (exists (select 1 from receipt_term t where t.id = receipt_term_fueling.receipt_term_id));
+
+-- ----------------------------------------------------------------------------
+-- Funções
+-- ----------------------------------------------------------------------------
+-- Emite o termo. p_prices: {"<id do item da OF>": preço por litro, ...}
+create or replace function emit_receipt_term(
+  p_order uuid,
+  p_invoice_number text,
+  p_invoice_date date,
+  p_prices jsonb,
+  p_fiscal_name text,
+  p_invoice_series text default null,
+  p_invoice_amount numeric default null,
+  p_issue_date date default null,
+  p_commitment text default null,
+  p_fiscal_registration text default null,
+  p_fiscal_ordinance text default null
+) returns uuid
+language plpgsql security definer set search_path = public, auth as $$
+declare
+  v_o supply_order%rowtype; v_dep department%rowtype;
+  v_issue date := coalesce(p_issue_date, current_date);
+  v_nf text := nullif(btrim(coalesce(p_invoice_number, '')), '');
+  v_series text := nullif(btrim(coalesce(p_invoice_series, '')), '');
+  v_fiscal text := nullif(btrim(coalesce(p_fiscal_name, '')), '');
+  v_commit text := nullif(btrim(coalesce(p_commitment, '')), '');
+  v_bad text; v_id uuid; v_total numeric(14,2); v_n integer;
+begin
+  select * into v_o from supply_order where id = p_order for update;
+  if v_o.id is null then raise exception 'Ordem de Fornecimento não encontrada.'; end if;
+  perform _billing_require(v_o.department_id);
+  if v_o.status = 'cancelada' then raise exception 'Esta ordem está cancelada.'; end if;
+  if v_o.status = 'faturada' then
+    raise exception 'Esta ordem já tem Termo de Recebimento. Para gerar outro, cancele o termo atual.';
+  end if;
+
+  v_commit := coalesce(v_commit, nullif(btrim(coalesce(v_o.commitment_number, '')), ''));
+  if v_commit is null then raise exception 'Informe o número do empenho.'; end if;
+  if v_nf is null then raise exception 'Informe o número da nota fiscal.'; end if;
+  if p_invoice_date is null then raise exception 'Informe a data da nota fiscal.'; end if;
+  if p_invoice_date < v_o.period_end then
+    raise exception 'A data da nota fiscal não pode ser anterior ao fim do período da ordem (%).', to_char(v_o.period_end, 'DD/MM/YYYY');
+  end if;
+  if p_invoice_date > current_date then raise exception 'A data da nota fiscal não pode ser futura.'; end if;
+  if v_issue > current_date then raise exception 'A data do termo não pode ser futura.'; end if;
+  if v_issue < p_invoice_date then raise exception 'A data do termo não pode ser anterior à data da nota fiscal.'; end if;
+  if v_issue < v_o.issue_date then
+    raise exception 'A data do termo não pode ser anterior à emissão da ordem (%).', to_char(v_o.issue_date, 'DD/MM/YYYY');
+  end if;
+  if v_fiscal is null then raise exception 'Informe o fiscal do contrato.'; end if;
+  if p_invoice_amount is not null and p_invoice_amount <= 0 then
+    raise exception 'O valor da nota fiscal deve ser maior que zero.';
+  end if;
+
+  -- Preço: um por combustível da OF, maior que zero, 3 casas
+  if p_prices is null or jsonb_typeof(p_prices) <> 'object' then
+    raise exception 'Informe o preço por litro de cada combustível.';
+  end if;
+  select string_agg(i.fuel_label, ', ' order by i.fuel_label) into v_bad
+    from supply_order_item i
+   where i.supply_order_id = p_order
+     and (coalesce(p_prices ->> i.id::text, '') !~ '^[0-9]{1,5}(\.[0-9]+)?$'
+          or round((p_prices ->> i.id::text)::numeric, 3) <= 0);
+  if v_bad is not null then
+    raise exception 'Informe o preço por litro, maior que zero, de: %.', v_bad;
+  end if;
+
+  select * into v_dep from department where id = v_o.department_id;
+
+  select sum(round(i.liters * round((p_prices ->> i.id::text)::numeric, 3), 2)) into v_total
+    from supply_order_item i where i.supply_order_id = p_order;
+
+  insert into receipt_term (
+    supply_order_id, number, invoice_number, invoice_series, invoice_date, invoice_amount,
+    issue_date, commitment_number, fiscal_name, fiscal_registration, fiscal_ordinance,
+    responsible_name_snapshot, responsible_role_snapshot, total_amount, created_by
+  ) values (
+    p_order, v_o.number, v_nf, v_series, p_invoice_date, p_invoice_amount,
+    v_issue, v_commit, v_fiscal,
+    nullif(btrim(coalesce(p_fiscal_registration, '')), ''),
+    nullif(btrim(coalesce(p_fiscal_ordinance, '')), ''),
+    coalesce(v_dep.responsible_name, v_o.responsible_name_snapshot),
+    coalesce(v_dep.responsible_role, v_o.responsible_role_snapshot),
+    v_total, auth.uid()
+  ) returning id into v_id;
+
+  -- R1
+  insert into receipt_term_item (receipt_term_id, fuel_type_code, fuel_subtype_id, fuel_label,
+                                 fuelings_count, liters, unit_price, amount)
+    select v_id, i.fuel_type_code, i.fuel_subtype_id, i.fuel_label, i.fuelings_count, i.liters,
+           round((p_prices ->> i.id::text)::numeric, 3),
+           round(i.liters * round((p_prices ->> i.id::text)::numeric, 3), 2)
+      from supply_order_item i
+     where i.supply_order_id = p_order;
+
+  -- R2
+  insert into receipt_term_fueling (receipt_term_id, order_fueling_id, unit_price, amount)
+    select v_id, sf.id, ti.unit_price, round(sf.liters * ti.unit_price, 2)
+      from supply_order_fueling sf
+      join receipt_term_item ti
+        on ti.receipt_term_id = v_id
+       and ti.fuel_type_code = sf.fuel_type_code
+       and ti.fuel_subtype_id is not distinct from sf.fuel_subtype_id
+     where sf.supply_order_id = p_order;
+  get diagnostics v_n = row_count;
+  if v_n <> v_o.total_fuelings then
+    raise exception 'A relação de abastecimentos da ordem está incompleta (% de %). Cancele a ordem e emita de novo.', v_n, v_o.total_fuelings;
+  end if;
+
+  update receipt_term_fueling tf
+     set amount = tf.amount + d.diff
+    from (
+      select ti.amount - sum(x.amount) as diff,
+             (array_agg(sf.id order by sf.line_no desc))[1] as last_id
+        from receipt_term_item ti
+        join supply_order_fueling sf
+          on sf.supply_order_id = p_order
+         and sf.fuel_type_code = ti.fuel_type_code
+         and sf.fuel_subtype_id is not distinct from ti.fuel_subtype_id
+        join receipt_term_fueling x
+          on x.receipt_term_id = v_id and x.order_fueling_id = sf.id
+       where ti.receipt_term_id = v_id
+       group by ti.id, ti.amount
+    ) d
+   where tf.receipt_term_id = v_id
+     and tf.order_fueling_id = d.last_id
+     and d.diff <> 0;
+
+  -- Abastecimentos passam a valer o preço e o valor do termo
+  perform set_config('gerirfrota.billing_bypass', '1', true);
+  update fueling f
+     set unit_price_before_invoice = f.unit_price,
+         unit_price = tf.unit_price,
+         invoiced_total = tf.amount
+    from receipt_term_fueling tf
+    join supply_order_fueling sf on sf.id = tf.order_fueling_id
+   where tf.receipt_term_id = v_id
+     and f.id = sf.fueling_id
+     and f.supply_order_id = p_order;
+  perform set_config('gerirfrota.billing_bypass', '0', true);
+
+  update supply_order
+     set status = 'faturada',
+         commitment_number = v_commit,
+         commitment_set_by = case when v_commit is distinct from v_o.commitment_number then auth.uid() else commitment_set_by end,
+         commitment_set_at = case when v_commit is distinct from v_o.commitment_number then now() else commitment_set_at end
+   where id = p_order;
+
+  return v_id;
+end;
+$$;
+revoke all on function emit_receipt_term(uuid, text, date, jsonb, text, text, numeric, date, text, text, text) from public;
+grant execute on function emit_receipt_term(uuid, text, date, jsonb, text, text, numeric, date, text, text, text) to authenticated;
+
+-- Cancela o termo: restaura o preço dos abastecimentos e a OF volta a Emitida.
+create or replace function cancel_receipt_term(p_term uuid, p_reason text) returns void
+language plpgsql security definer set search_path = public, auth as $$
+declare v_t receipt_term%rowtype; v_o supply_order%rowtype; v_r text := btrim(coalesce(p_reason, ''));
+begin
+  select * into v_t from receipt_term where id = p_term;
+  if v_t.id is null then raise exception 'Termo de Recebimento não encontrado.'; end if;
+  select * into v_o from supply_order where id = v_t.supply_order_id for update;
+  perform _billing_require(v_o.department_id);
+  select * into v_t from receipt_term where id = p_term for update;
+  if v_t.status = 'cancelado' then raise exception 'Este termo já está cancelado.'; end if;
+  if length(v_r) < 5 then raise exception 'Informe a justificativa do cancelamento.'; end if;
+
+  perform set_config('gerirfrota.billing_bypass', '1', true);
+  update fueling
+     set unit_price = coalesce(unit_price_before_invoice, unit_price),
+         unit_price_before_invoice = null,
+         invoiced_total = null
+   where supply_order_id = v_o.id
+     and invoiced_total is not null;
+  perform set_config('gerirfrota.billing_bypass', '0', true);
+
+  update receipt_term
+     set status = 'cancelado', cancel_reason = v_r,
+         canceled_by = auth.uid(), canceled_at = now()
+   where id = p_term;
+  update supply_order set status = 'emitida' where id = v_o.id;
+end;
+$$;
+revoke all on function cancel_receipt_term(uuid, text) from public;
+grant execute on function cancel_receipt_term(uuid, text) to authenticated;
+
+-- Linhas do Anexo I de um termo (emitido ou cancelado), com o valor gravado.
+-- O Anexo II é a soma destas linhas por veículo.
+create or replace function receipt_term_fuelings(p_term uuid)
+returns table (
+  line_no integer, fueling_date date, authorization_number text,
+  vehicle_id uuid, plate text, vehicle_model text, vehicle_type_code smallint,
+  fuel_label text, liters numeric, km_initial integer, km_final integer,
+  unit_price numeric, amount numeric
+)
+language plpgsql stable security definer set search_path = public, auth as $$
+#variable_conflict use_column
+declare v_dept uuid; v_role user_role;
+begin
+  select o.department_id into v_dept
+    from receipt_term t join supply_order o on o.id = t.supply_order_id
+   where t.id = p_term;
+  if v_dept is null then return; end if;
+  v_role := current_user_role();
+  if v_role = 'admin' then null;
+  elsif v_role = 'usuario' then
+    if current_user_department_id() is not null
+       and current_user_department_id() is distinct from v_dept then return; end if;
+  else
+    return;
+  end if;
+  return query
+    select sf.line_no, sf.fueling_date, sf.authorization_number,
+           sf.vehicle_id, sf.plate, sf.vehicle_model, sf.vehicle_type_code,
+           sf.fuel_label, sf.liters::numeric, sf.km_initial, sf.km_final,
+           tf.unit_price::numeric, tf.amount::numeric
+      from receipt_term_fueling tf
+      join supply_order_fueling sf on sf.id = tf.order_fueling_id
+     where tf.receipt_term_id = p_term
+     order by sf.line_no;
+end;
+$$;
+revoke all on function receipt_term_fuelings(uuid) from public;
+grant execute on function receipt_term_fuelings(uuid) to authenticated;
 
 -- Reload do schema cache do PostgREST
 notify pgrst, 'reload schema';

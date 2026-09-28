@@ -6,16 +6,23 @@ import { esc, toast, fmtDate, fmtCNPJ, openModal, closeModal } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile } from '../auth.js';
 import { exportXLSX, timestampFilename } from '../export.js';
-import { fmtLiters, ORDER_STATUS, billingError, isBillingMissing, withTimeout } from '../billing.js';
-import { printSupplyOrder } from '../billing_docs.js';
+import { fmtLiters, fmtAmount, ORDER_STATUS, billingError, isBillingMissing, withTimeout } from '../billing.js';
+import { printSupplyOrder, printReceiptTerm } from '../billing_docs.js';
+import { openTermModal, openCancelTermModal, openTermHistoryModal } from './faturamento_termo.js';
 
 let _orders = [];
 let _search = '';
 let _filter = { dept: '', supplier: '', month: '', status: '' };
 let _ctx = null;
+// false quando o banco ainda não recebeu a parte do Termo de Recebimento
+let _hasTerms = true;
 
 const canWrite = () => ['admin', 'usuario'].includes(getProfile()?.role);
 const isSupplier = () => getProfile()?.role === 'fornecedor';
+const activeTerm = (o) => (o.terms || []).find(t => t.status === 'emitido') || null;
+const canceledTerms = (o) => (o.terms || []).filter(t => t.status === 'cancelado');
+// O posto não vê termo; banco sem a parte do termo também não mostra a coluna
+const showTerms = () => _hasTerms && !isSupplier();
 
 export async function renderOrdersTab(container, ctx) {
   _ctx = ctx;
@@ -25,7 +32,7 @@ export async function renderOrdersTab(container, ctx) {
         <div class="search ${_search ? 'has-value' : ''}" id="of-search-box">
           ${icons.search}
           <input id="of-search" type="search" autocomplete="off" value="${esc(_search)}"
-                 placeholder="Buscar por nº, secretaria, fornecedor, contrato, empenho…">
+                 placeholder="Buscar por nº, secretaria, fornecedor, contrato, empenho, nota fiscal…">
           <button class="clear" id="of-search-clear" aria-label="Limpar busca">${icons.close}</button>
         </div>
         <div class="count" id="of-count"></div>
@@ -64,17 +71,27 @@ export async function renderOrdersTab(container, ctx) {
 
 async function load() {
   const box = document.getElementById('of-tablebox');
-  let res;
-  try {
-    res = await withTimeout(supabase.from('supply_order').select(`
+  if (!box) return;
+  const COLS = `
       id, department_id, supplier_id, number, year, seq, reference_month,
       period_start, period_end, issue_date, selection_mode, commitment_number, status,
       total_fuelings, total_liters,
       department_name_snapshot, department_acronym_snapshot,
       supplier_name_snapshot, supplier_cnpj_snapshot, contract_number_snapshot,
       cancel_reason, canceled_at, created_at,
-      items:supply_order_item(fuel_label, fuelings_count, liters)
-    `).order('created_at', { ascending: false }));
+      items:supply_order_item(fuel_label, fuelings_count, liters)`;
+  const TERM_COLS = `,
+      terms:receipt_term(id, number, status, invoice_number, invoice_series, invoice_date,
+        issue_date, total_amount, fiscal_name, cancel_reason, canceled_at, created_at)`;
+  const query = (cols) => withTimeout(supabase.from('supply_order').select(cols).order('created_at', { ascending: false }));
+  let res;
+  try {
+    res = await query(COLS + TERM_COLS);
+    _hasTerms = true;
+    if (res.error && /receipt_term|relationship/i.test(res.error.message || '')) {
+      _hasTerms = false;
+      res = await query(COLS);
+    }
   } catch (e) { res = { error: e }; }
   if (!box.isConnected) return;
 
@@ -140,7 +157,8 @@ function matches(o) {
   if (!_search) return true;
   const t = _search.toLowerCase();
   return [o.number, o.department_acronym_snapshot, o.department_name_snapshot, o.supplier_name_snapshot,
-          o.contract_number_snapshot, o.commitment_number, o.reference_month, fmtCNPJ(o.supplier_cnpj_snapshot)]
+          o.contract_number_snapshot, o.commitment_number, o.reference_month, fmtCNPJ(o.supplier_cnpj_snapshot),
+          ...(o.terms || []).map(t => t.invoice_number)]
     .some(v => String(v || '').toLowerCase().includes(t));
 }
 
@@ -176,13 +194,13 @@ function renderTable() {
     <div class="table-wrap">
       <table class="table">
         <thead><tr>
-          <th>Nº / Emissão</th>
-          <th>Secretaria</th>
+          <th>Ordem</th>
           <th>Fornecedor</th>
           <th>Competência</th>
           <th>Quantidade</th>
           <th>Empenho</th>
           <th>Situação</th>
+          ${showTerms() ? '<th>Termo</th>' : ''}
           <th class="actions-col">Ações</th>
         </tr></thead>
         <tbody>${list.map(rowHTML).join('')}</tbody>
@@ -190,10 +208,17 @@ function renderTable() {
     </div>`;
 }
 
+/** "01/08 a 31/08/2026" quando o período fica no mesmo ano. */
+function fmtPeriod(a, b) {
+  const s = fmtDate(a), e = fmtDate(b);
+  return String(a).slice(0, 4) === String(b).slice(0, 4) ? `${s.slice(0, 5)} a ${e}` : `${s} a ${e}`;
+}
+
 function rowHTML(o) {
   const st = ORDER_STATUS[o.status] || ORDER_STATUS.emitida;
   const items = [...(o.items || [])].sort((a, b) => String(a.fuel_label).localeCompare(String(b.fuel_label)));
   const editable = canWrite() && o.status === 'emitida';
+  const term = activeTerm(o), old = canceledTerms(o);
 
   const empenho = isSupplier()
     ? esc(o.commitment_number || '—')
@@ -207,14 +232,13 @@ function rowHTML(o) {
 
   return `
     <tr ${o.status === 'cancelada' ? 'class="is-canceled"' : ''}>
-      <td data-label="Nº / Emissão">
+      <td data-label="Ordem">
         <div class="cell-stack">
           <strong class="of-mono">${esc(o.number)}</strong>
-          <span class="of-sub">${esc(fmtDate(o.issue_date))}</span>
+          <span class="of-sub of-nowrap" title="${esc(o.department_name_snapshot)}"><b>${esc(o.department_acronym_snapshot)}</b> · ${esc(fmtDate(o.issue_date))}</span>
         </div>
       </td>
-      <td data-label="Secretaria"><span class="badge" title="${esc(o.department_name_snapshot)}">${esc(o.department_acronym_snapshot)}</span></td>
-      <td data-label="Fornecedor">
+      <td data-label="Fornecedor" class="of-col-supplier">
         <div class="cell-stack">
           <span>${esc(o.supplier_name_snapshot)}</span>
           <span class="of-sub">${o.contract_number_snapshot ? 'Contrato nº ' + esc(o.contract_number_snapshot) : 'Sem nº de contrato'}</span>
@@ -223,12 +247,12 @@ function rowHTML(o) {
       <td data-label="Competência">
         <div class="cell-stack">
           <span>${esc(o.reference_month)}</span>
-          <span class="of-sub">${esc(fmtDate(o.period_start))} a ${esc(fmtDate(o.period_end))}</span>
+          <span class="of-sub of-nowrap">${esc(fmtPeriod(o.period_start, o.period_end))}</span>
         </div>
       </td>
       <td data-label="Quantidade">
         <div class="cell-stack">
-          <span><strong>${fmtLiters(o.total_liters)} L</strong> · ${o.total_fuelings} abast.</span>
+          <span class="of-nowrap"><strong>${fmtLiters(o.total_liters)} L</strong> · ${o.total_fuelings} abast.</span>
           <span class="of-sub">${items.map(i => `${esc(i.fuel_label)} ${fmtLiters(i.liters)} L`).join(' · ')}</span>
         </div>
       </td>
@@ -239,11 +263,25 @@ function rowHTML(o) {
           ${o.status === 'cancelada' && o.cancel_reason ? `<span class="of-sub of-reason">${esc(o.cancel_reason)}</span>` : ''}
         </div>
       </td>
+      ${showTerms() ? `<td data-label="Termo">${
+        term ? `<div class="cell-stack">
+            <span class="of-nowrap">NF ${esc(term.invoice_number)} · ${esc(fmtDate(term.invoice_date))}</span>
+            <span class="of-sub of-amount">R$ ${fmtAmount(term.total_amount)}</span>
+          </div>`
+        : editable ? `<button class="btn btn-outline btn-sm of-act" data-act="term" data-id="${o.id}"
+            title="Gerar o Termo de Recebimento desta ordem">${icons.fileCheck}<span>Gerar termo</span></button>`
+        : '<span class="of-sub">—</span>'}</td>` : ''}
       <td class="actions-col">
         <div class="actions-row">
           <button class="btn btn-ghost btn-icon btn-sm" data-act="pdf" data-id="${o.id}" title="Abrir a ordem em PDF">${icons.printer}</button>
+          ${term && showTerms() ? `<button class="btn btn-ghost btn-icon btn-sm" data-act="term-pdf" data-id="${o.id}"
+              title="Abrir o Termo de Recebimento em PDF">${icons.fileCheck}</button>` : ''}
+          ${old.length ? `<button class="btn btn-ghost btn-icon btn-sm" data-act="term-history" data-id="${o.id}"
+              title="${old.length} termo(s) cancelado(s) desta ordem">${icons.history}</button>` : ''}
           ${editable ? `<button class="btn btn-ghost btn-icon btn-sm" data-act="cancel" data-id="${o.id}"
               title="Cancelar a ordem" style="color:var(--danger)">${icons.ban}</button>` : ''}
+          ${term && canWrite() ? `<button class="btn btn-ghost btn-icon btn-sm" data-act="term-cancel" data-id="${o.id}"
+              title="Cancelar o termo" style="color:var(--danger)">${icons.ban}</button>` : ''}
         </div>
       </td>
     </tr>`;
@@ -292,8 +330,14 @@ function bind(container) {
     if (btn.dataset.act === 'pdf') {
       btn.disabled = true;
       try { await printSupplyOrder(o.id); } finally { btn.disabled = false; }
+    } else if (btn.dataset.act === 'term-pdf') {
+      btn.disabled = true;
+      try { await printReceiptTerm(activeTerm(o)?.id); } finally { btn.disabled = false; }
     } else if (btn.dataset.act === 'empenho') openCommitmentModal(o);
     else if (btn.dataset.act === 'cancel') openCancelModal(o);
+    else if (btn.dataset.act === 'term') openTermModal(o, load);
+    else if (btn.dataset.act === 'term-cancel') openCancelTermModal(o, activeTerm(o), load);
+    else if (btn.dataset.act === 'term-history') openTermHistoryModal(o);
   });
 }
 
@@ -397,14 +441,17 @@ function exportList() {
     filename: timestampFilename('ordens_de_fornecimento'),
     sheetName: 'Ordens de Fornecimento',
     columns: ['Nº', 'Emissão', 'Sigla', 'Secretaria', 'Fornecedor', 'CNPJ', 'Contrato', 'Competência',
-              'Período início', 'Período fim', 'Abastecimentos', 'Litros', 'Combustíveis', 'Empenho', 'Situação', 'Justificativa do cancelamento'],
-    rows: list.map(o => [
+              'Período início', 'Período fim', 'Abastecimentos', 'Litros', 'Combustíveis', 'Empenho', 'Situação', 'Justificativa do cancelamento',
+              'Nota fiscal', 'Série', 'Data da nota', 'Data do termo', 'Valor do termo (R$)', 'Fiscal', 'Termos cancelados'],
+    rows: list.map(o => [o, activeTerm(o)]).map(([o, t]) => [
       o.number, fmtDate(o.issue_date), o.department_acronym_snapshot, o.department_name_snapshot,
       o.supplier_name_snapshot, fmtCNPJ(o.supplier_cnpj_snapshot), o.contract_number_snapshot || '',
       o.reference_month, fmtDate(o.period_start), fmtDate(o.period_end),
       o.total_fuelings, Number(o.total_liters),
       (o.items || []).map(i => `${i.fuel_label}: ${fmtLiters(i.liters)} L`).join(' | '),
       o.commitment_number || '', (ORDER_STATUS[o.status] || {}).label || o.status, o.cancel_reason || '',
+      t?.invoice_number || '', t?.invoice_series || '', t ? fmtDate(t.invoice_date) : '', t ? fmtDate(t.issue_date) : '',
+      t ? Number(t.total_amount) : '', t?.fiscal_name || '', canceledTerms(o).length || '',
     ]),
   });
   toast(`${list.length} ordem(ns) exportada(s).`, 'success');

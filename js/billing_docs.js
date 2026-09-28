@@ -1,10 +1,11 @@
 // Documentos do faturamento em PDF (A4 retrato), conforme os modelos do cliente.
-// São montados só com os dados congelados na ordem: reimprimir dá o mesmo papel.
+// São montados só com os dados congelados na ordem e no termo: reimprimir dá o
+// mesmo documento.
 import { supabase } from './supabase.js';
 import { esc, fmtDate, fmtCNPJ, formatPlate, toast } from './ui.js';
 import { getEntity, reportLogoUrl } from './shell.js';
 import { openPrintTab } from './thermal.js';
-import { fmtLiters, billingError } from './billing.js';
+import { fmtLiters, fmtAmount, fmtPrice, fmtInt, toCenti, fmtCents, billingError } from './billing.js';
 
 // Estilo comum aos documentos (modelos/_estilo.css do pacote do cliente).
 const DOC_CSS = `
@@ -64,10 +65,14 @@ function headerHTML(entity, order) {
 </div>`;
 }
 
-function canceledHTML(order, what) {
-  if (order.status !== 'cancelada') return '';
-  return `<div class="cancelada">${what} CANCELADA<small>${esc(order.cancel_reason || '')}${order.canceled_at ? ' · ' + esc(fmtDate(String(order.canceled_at).slice(0, 10))) : ''}</small></div>`;
+/** Faixa de documento cancelado. doc = ordem ou termo; label = 'ORDEM CANCELADA'. */
+function canceledHTML(doc, label) {
+  if (!['cancelada', 'cancelado'].includes(doc.status)) return '';
+  return `<div class="cancelada">${label}<small>${esc(doc.cancel_reason || '')}${doc.canceled_at ? ' · ' + esc(fmtDate(String(doc.canceled_at).slice(0, 10))) : ''}</small></div>`;
 }
+
+/** "A", "A e B", "A, B e C" */
+const joinList = (arr) => arr.length < 2 ? arr.join('') : arr.slice(0, -1).join(', ') + ' e ' + arr[arr.length - 1];
 
 /** HTML completo da Ordem de Fornecimento. Exportado para os testes. */
 export function supplyOrderHTML({ entity, city, order, items, fuelings }) {
@@ -97,7 +102,7 @@ ${headerHTML(entity, order)}
   <h1>ORDEM DE FORNECIMENTO</h1>
   <div class="num">Nº ${esc(order.number)} · Combustíveis · Competência ${esc(order.reference_month)}</div>
 </div>
-${canceledHTML(order, 'ORDEM')}
+${canceledHTML(order, 'ORDEM CANCELADA')}
 
 <h2>1. Dados do contrato</h2>
 <table class="dados">
@@ -142,6 +147,140 @@ ${canceledHTML(order, 'ORDEM')}
 
 </body>
 </html>`;
+}
+
+/** R3 · Anexo II: soma das linhas do Anexo I por veículo. Km = soma de (final − inicial). */
+export function termVehicles(lines) {
+  const map = new Map();
+  lines.forEach(l => {
+    const v = map.get(l.plate) || { plate: l.plate, model: l.vehicle_model || '', fuels: new Set(), n: 0, liters: 0, amount: 0, km: 0 };
+    v.n++; v.liters += toCenti(l.liters) || 0; v.amount += toCenti(l.amount) || 0;
+    v.fuels.add(l.fuel_label);
+    // tipo 99 (Outros) usa o km sentinela 99999999: não tem odômetro
+    if (l.vehicle_type_code !== 99 && l.km_initial != null && l.km_final != null && l.km_final !== 99999999) {
+      v.km += Math.max(0, l.km_final - l.km_initial);
+    }
+    map.set(l.plate, v);
+  });
+  return [...map.values()].sort((a, b) => a.plate.localeCompare(b.plate)).map(v => ({
+    ...v, fuel: [...v.fuels].join(', '),
+    kmPerLiter: v.km > 0 && v.liters > 0 ? Math.round(v.km * 10000 / v.liters) / 100 : null,
+  }));
+}
+
+/** HTML completo do Termo de Recebimento. Exportado para os testes. */
+export function receiptTermHTML({ entity, city, term, order, items, lines }) {
+  const contratante = `${esc(order.department_name_snapshot)} · CNPJ ${esc(order.department_cnpj_snapshot ? fmtCNPJ(order.department_cnpj_snapshot) : '—')}`;
+  const contratada = `${esc(order.supplier_name_snapshot)} · CNPJ ${esc(fmtCNPJ(order.supplier_cnpj_snapshot))}`;
+  const nf = `${esc(term.invoice_number)}${term.invoice_series ? ' · série ' + esc(term.invoice_series) : ''}`;
+  const vehicles = termVehicles(lines);
+  const fiscalLine = ['Fiscal do contrato', term.fiscal_registration ? 'Mat. ' + term.fiscal_registration : ''].filter(Boolean).join(' · ');
+
+  const itemRows = items.map(it => `
+    <tr><td>${esc(it.fuel_label)}</td><td class="n">${fmtInt(it.fuelings_count)}</td><td class="n">${fmtLiters(it.liters)}</td>
+        <td class="n">${fmtPrice(it.unit_price)}</td><td class="n">${fmtAmount(it.amount)}</td></tr>`).join('');
+  const lineRows = lines.map(l => `
+      <tr><td>${esc(fmtDate(l.fueling_date))}</td><td>${esc(l.authorization_number || 'manual')}</td>
+          <td>${esc(formatPlate(l.plate))}</td><td>${esc(l.fuel_label)}</td>
+          <td class="n">${fmtLiters(l.liters)}</td><td class="n">${fmtAmount(l.amount)}</td></tr>`).join('');
+  const vehicleRows = vehicles.map(v => `
+      <tr><td>${esc(formatPlate(v.plate))}</td><td>${esc(v.model)}</td><td>${esc(v.fuel)}</td>
+          <td class="n">${fmtInt(v.n)}</td><td class="n">${fmtCents(v.liters)}</td>
+          <td class="n">${v.km > 0 ? fmtInt(v.km) : '—'}</td><td class="n">${v.kmPerLiter != null ? fmtAmount(v.kmPerLiter) : '—'}</td>
+          <td class="n">${fmtCents(v.amount)}</td></tr>`).join('');
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Termo de Recebimento ${esc(term.number)} - ${esc(order.department_acronym_snapshot)}</title>
+<style>${DOC_CSS}</style>
+</head>
+<body>
+${headerHTML(entity, order)}
+
+<div class="titulo">
+  <h1>TERMO DE RECEBIMENTO DEFINITIVO</h1>
+  <div class="num">Nº ${esc(term.number)} · Combustíveis · Competência ${esc(order.reference_month)}</div>
+</div>
+${canceledHTML(term, 'TERMO CANCELADO')}
+
+<h2>1. Dados do contrato</h2>
+<table class="dados">
+  <tr><td><span class="k">Contratante</span>${contratante}</td>
+      <td><span class="k">Contratada</span>${contratada}</td></tr>
+  <tr><td><span class="k">Contrato nº</span>${esc(dash(order.contract_number_snapshot))}</td>
+      <td><span class="k">Nota de empenho nº</span>${esc(term.commitment_number)}</td></tr>
+  <tr><td><span class="k">Ordem de fornecimento nº</span>${esc(order.number)}</td>
+      <td><span class="k">Nota fiscal nº / data</span>${nf} · ${esc(fmtDate(term.invoice_date))}</td></tr>
+</table>
+
+<h2>2. Quantidade e valor</h2>
+<table class="lista">
+  <thead><tr><th>Combustível</th><th class="n">Abast.</th><th class="n">Litros</th><th class="n">Preço (R$/L)</th><th class="n">Valor (R$)</th></tr></thead>
+  <tbody>${itemRows}
+    <tr class="tot"><td>Total</td><td class="n">${fmtInt(order.total_fuelings)}</td><td class="n">${fmtLiters(order.total_liters)}</td><td></td><td class="n">${fmtAmount(term.total_amount)}</td></tr>
+  </tbody>
+</table>
+
+<h2>3. Declaração</h2>
+<p class="texto">
+  Declaro, para fins de liquidação da despesa, que o ${esc(order.department_name_snapshot)} recebeu em definitivo da empresa
+  <b>${esc(order.supplier_name_snapshot)}</b> o fornecimento objeto da Ordem de Fornecimento nº <b>${esc(order.number)}</b>:
+  ${joinList(items.map(it => `<b>${fmtLiters(it.liters)} litros de ${esc(it.fuel_label)}</b>`))},
+  totalizando <b>${fmtLiters(order.total_liters)} litros</b> em <b>${fmtInt(order.total_fuelings)} abastecimentos</b>
+  realizados de ${esc(fmtDate(order.period_start))} a ${esc(fmtDate(order.period_end))}, conforme os Anexos I e II,
+  no valor de <b>R$ ${fmtAmount(term.total_amount)}</b>. O fornecimento atende ao contrato em quantidade,
+  especificação e preço, e a nota fiscal nº ${esc(term.invoice_number)} fica atestada para pagamento
+  (Lei nº 14.133/2021, art. 140, II, "b"; Lei nº 4.320/1964, art. 63).
+</p>
+<p class="local">${esc(city || '')} (PI), ${esc(fmtDate(term.issue_date))}.</p>
+
+<div class="assinaturas">
+  <div><b>${esc(term.fiscal_name)}</b>${esc(fiscalLine)}${term.fiscal_ordinance ? '<br>' + esc(term.fiscal_ordinance) : ''}</div>
+  <div><b>${esc(dash(term.responsible_name_snapshot))}</b>${esc(term.responsible_role_snapshot || '')}</div>
+</div>
+
+<div class="anexo">
+  <h2>Anexo I · Relação de abastecimentos</h2>
+  <table class="lista">
+    <thead><tr><th>Data</th><th>Autorização</th><th>Placa</th><th>Combustível</th><th class="n">Litros</th><th class="n">Valor (R$)</th></tr></thead>
+    <tbody>${lineRows}
+      <tr class="tot"><td colspan="4">Total · ${fmtInt(order.total_fuelings)} abastecimentos</td><td class="n">${fmtLiters(order.total_liters)}</td><td class="n">${fmtAmount(term.total_amount)}</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Anexo II · Relação de veículos</h2>
+  <table class="lista">
+    <thead><tr><th>Placa</th><th>Veículo</th><th>Combustível</th><th class="n">Abast.</th><th class="n">Litros</th><th class="n">Km</th><th class="n">Km/L</th><th class="n">Valor (R$)</th></tr></thead>
+    <tbody>${vehicleRows}
+      <tr class="tot"><td colspan="3">Total · ${fmtInt(vehicles.length)} veículo${vehicles.length === 1 ? '' : 's'}</td><td class="n">${fmtInt(order.total_fuelings)}</td><td class="n">${fmtLiters(order.total_liters)}</td><td></td><td></td><td class="n">${fmtAmount(term.total_amount)}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+</body>
+</html>`;
+}
+
+/** Busca o termo e abre o PDF em nova aba. Devolve true se abriu. */
+export async function printReceiptTerm(termId) {
+  const [t, l, entity] = await Promise.all([
+    supabase.from('receipt_term')
+      .select('*, items:receipt_term_item(fuel_label, fuelings_count, liters, unit_price, amount), order:supply_order_id(*)')
+      .eq('id', termId).maybeSingle(),
+    supabase.rpc('receipt_term_fuelings', { p_term: termId }),
+    getEntity(),
+  ]);
+  const err = t.error || l.error;
+  if (err) { toast(billingError(err), 'error'); return false; }
+  if (!t.data || !t.data.order) { toast('Termo de Recebimento não encontrado.', 'error'); return false; }
+  const city = await municipalityName(entity);
+  const items = [...(t.data.items || [])].sort((a, b) => String(a.fuel_label).localeCompare(String(b.fuel_label)));
+  const html = receiptTermHTML({ entity, city, term: t.data, order: t.data.order, items, lines: l.data || [] });
+  const win = openPrintTab(html, { title: `Termo de Recebimento ${t.data.number}` });
+  if (!win) toast('O navegador bloqueou a nova aba. Permita pop-ups para este site e tente de novo.', 'warning', 7000);
+  return !!win;
 }
 
 /** Busca a ordem e abre o PDF em nova aba. Devolve true se abriu. */
