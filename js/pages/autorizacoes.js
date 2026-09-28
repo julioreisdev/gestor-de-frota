@@ -1,10 +1,11 @@
 import { getEntity } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel, supplierCellHTML } from '../ui.js';
+import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel, supplierCellHTML, isMissingColumn } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 import QRCode from 'https://esm.sh/qrcode@1.5.3';
 import { openPrintTab, openThermalPDF, hasChosenThermalWidth, askThermalWidth } from '../thermal.js';
+import { loadDriversForPick, driverFieldHTML, mountDriverField } from '../drivers.js';
 
 const STATUS_LABEL = { emitida: 'Emitida', utilizada: 'Utilizada', cancelada: 'Cancelada' };
 const STATUS_BADGE = { emitida: 'badge badge-warning', utilizada: 'badge badge-success', cancelada: 'badge badge-danger' };
@@ -20,7 +21,10 @@ let _supplierFuels = []; // expandido: {supplier_id, fuel_type_code, fuel_subtyp
 let _fuels = [];
 let _fuelSubs = [];
 let _depts = [];
-let _filter = { search: '', status: '', month: '' };
+let _filter = { search: '', status: '', month: '', driver: '' };
+// Motoristas para escolha. _hasDrivers = false: banco ainda sem o cadastro, a tela segue sem o campo.
+let _drivers = [];
+let _hasDrivers = false;
 
 // =============================================================================
 // ABA DE ABASTECIMENTO — renderiza dentro de um container fornecido
@@ -63,6 +67,7 @@ export async function renderFuelingTab(container) {
         </select>
         <input class="input chip" type="month" id="ff-month"
                value="${esc(_filter.month)}">
+        <select class="select chip" id="ff-driver" aria-label="Motorista" hidden></select>
         <button class="btn btn-ghost btn-sm" id="ff-clear" hidden>Limpar filtros</button>
       </div>
       <div id="aut-tablebox">
@@ -100,8 +105,13 @@ export async function renderFuelingTab(container) {
     renderTable();
     renderLimitCard();
   });
+  document.getElementById('ff-driver').addEventListener('change', (e) => {
+    _filter.driver = e.target.value;
+    updateFilterClearVisibility();
+    renderTable();
+  });
   document.getElementById('ff-clear').addEventListener('click', () => {
-    _filter = { search: _filter.search, status: '', month: '' };
+    _filter = { search: _filter.search, status: '', month: '', driver: '' };
     document.getElementById('ff-status').value = '';
     document.getElementById('ff-month').value = '';
     updateFilterClearVisibility();
@@ -116,8 +126,20 @@ export async function renderFuelingTab(container) {
 }
 
 function updateFilterClearVisibility() {
-  const any = _filter.status || _filter.month;
+  const any = _filter.status || _filter.month || _filter.driver;
   document.getElementById('ff-clear').hidden = !any;
+}
+
+/** Filtro de motorista: só aparece quando alguma autorização tem motorista. */
+function fillDriverFilter() {
+  const sel = document.getElementById('ff-driver');
+  if (!sel) return;
+  const names = [...new Set(_items.map(a => a.driver_name_snapshot).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  if (_filter.driver && _filter.driver !== 'none' && !names.includes(_filter.driver)) _filter.driver = '';
+  sel.hidden = !names.length;
+  sel.innerHTML = '<option value="">Todos motoristas</option><option value="none">Sem motorista</option>' +
+    names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  sel.value = _filter.driver;
 }
 
 // =============================================================================
@@ -138,19 +160,20 @@ async function loadAll() {
   const usersPromise = isAdmin()
     ? supabase.rpc('admin_list_users')
     : Promise.resolve({ data: [] });
-  const [a, v, s, sf, ft, fs, d, srv, users] = await Promise.all([
-    supabase.from('fueling_authorization').select(`
+  const autQuery = (extra) => supabase.from('fueling_authorization').select(`
       id, number, date, status,
       vehicle_id, supplier_id, fuel_type_code, fuel_subtype_id,
       authorized_quantity, unit_price_snapshot, estimated_total,
       responsible_name, notes, created_by,
       vehicle_plate_snapshot, vehicle_model_snapshot,
       department_acronym_snapshot, supplier_trade_name_snapshot,
-      qr_payload, created_at
-    `).is('deleted_at', null).order('date', { ascending: false }).order('number', { ascending: false }),
+      qr_payload, created_at${extra}
+    `).is('deleted_at', null).order('date', { ascending: false }).order('number', { ascending: false });
+  let [a, v, s, sf, ft, fs, d, srv, users, drv] = await Promise.all([
+    autQuery(', driver_id, driver_name_snapshot'),
     supabase.from('vehicle').select(`
       id, plate, model, brand, tank_capacity, current_km,
-      fuel_type_code, fuel_subtype_id, department_id, vehicle_origin_code,
+      fuel_type_code, fuel_subtype_id, department_id, vehicle_origin_code, vehicle_type_code,
       department:department_id(acronym, name)
     `).is('deleted_at', null).order('plate'),
     supabase.from('supplier').select(`
@@ -167,7 +190,13 @@ async function loadAll() {
     supabase.from('department').select('id, acronym, name').order('acronym'),
     srvPromise,
     usersPromise,
+    isFornecedor() ? Promise.resolve({ drivers: [], available: false }) : loadDriversForPick(),
   ]);
+  // Banco ainda sem as colunas do motorista: carrega como antes, sem o campo
+  let hasDriverCols = true;
+  if (a.error && isMissingColumn(a.error)) { hasDriverCols = false; a = await autQuery(''); }
+  _drivers = drv.drivers;
+  _hasDrivers = drv.available && hasDriverCols;
   if (a.error) { toast('Falha ao carregar autorizações: ' + a.error.message, 'error'); _items = []; }
   else _items = a.data || [];
   _vehicles = v.data || [];
@@ -342,17 +371,21 @@ function applyFilters() {
   return _items.filter(a => {
     if (_filter.status && a.status !== _filter.status) return false;
     if (_filter.month && String(a.date).slice(0, 7) !== _filter.month) return false;
+    if (_filter.driver === 'none' && a.driver_name_snapshot) return false;
+    if (_filter.driver && _filter.driver !== 'none' && a.driver_name_snapshot !== _filter.driver) return false;
     if (!t) return true;
     return (a.number || '').toLowerCase().includes(t)
         || (a.vehicle_plate_snapshot || '').toLowerCase().includes(t)
         || (a.supplier_trade_name_snapshot || '').toLowerCase().includes(t)
-        || (a.responsible_name || '').toLowerCase().includes(t);
+        || (a.responsible_name || '').toLowerCase().includes(t)
+        || (a.driver_name_snapshot || '').toLowerCase().includes(t);
   });
 }
 
 function renderTable() {
   const box = document.getElementById('aut-tablebox');
   const countEl = document.getElementById('aut-count');
+  fillDriverFilter();
 
   if (!_items.length) {
     if (countEl) countEl.textContent = '';
@@ -367,7 +400,7 @@ function renderTable() {
 
   const filtered = applyFilters();
   if (countEl) {
-    const any = _filter.search || _filter.status || _filter.month;
+    const any = _filter.search || _filter.status || _filter.month || _filter.driver;
     countEl.textContent = any
       ? `${filtered.length} de ${_items.length} autorização(ões)`
       : `${_items.length} autorização(ões)`;
@@ -432,7 +465,9 @@ function autRow(a) {
       <td data-label="Qtd" style="white-space:nowrap">${Number(a.authorized_quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L</td>
       <td data-label="Valor est." style="white-space:nowrap;color:var(--success);font-weight:500">${fmtMoney(a.estimated_total)}</td>
       <td data-label="Fornecedor">${supplierCellHTML(a.supplier_trade_name_snapshot, _suppliers.find(s => s.id === a.supplier_id))}</td>
-      <td data-label="Responsável" style="font-size:12.5px">${esc(a.responsible_name)}</td>
+      <td data-label="Responsável" style="font-size:12.5px">${a.driver_name_snapshot
+        ? `<div class="cell-stack"><span>${esc(a.responsible_name)}</span><span class="of-sub">Motorista: ${esc(a.driver_name_snapshot)}</span></div>`
+        : esc(a.responsible_name)}</td>
       <td data-label="Situação"><span class="${STATUS_BADGE[a.status]}">${esc(STATUS_LABEL[a.status])}</span></td>
       <td class="actions-col">
         <div class="actions-row">
@@ -441,7 +476,7 @@ function autRow(a) {
           <button class="btn btn-ghost btn-icon btn-sm" data-act="print-a4"      data-id="${a.id}" title="Imprimir A4">${icons.printer}</button>
           <button class="btn btn-ghost btn-icon btn-sm" data-act="print-thermal" data-id="${a.id}" title="Imprimir térmica (PDF 58/80mm)">${icons.receipt}</button>
           ${isFornecedor() ? '' : `
-          <button class="btn btn-ghost btn-icon btn-sm" data-act="edit"          data-id="${a.id}" title="Editar quantidade" ${emitida ? '' : 'disabled'}>${icons.edit}</button>
+          <button class="btn btn-ghost btn-icon btn-sm" data-act="edit"          data-id="${a.id}" title="${_hasDrivers ? 'Editar quantidade e motorista' : 'Editar quantidade'}" ${emitida ? '' : 'disabled'}>${icons.edit}</button>
           <button class="btn btn-ghost btn-icon btn-sm" data-act="cancel"        data-id="${a.id}" title="Cancelar" ${emitida ? '' : 'disabled'} style="color:var(--warning)">${icons.ban}</button>
           ${isAdmin() ? `<button class="btn btn-ghost btn-icon btn-sm" data-act="delete"        data-id="${a.id}" title="Excluir" style="color:var(--danger)">${icons.trash}</button>` : ''}`}
         </div>
@@ -485,6 +520,7 @@ function openAutModal(id) {
           <select class="select" name="vehicle_id" id="aut-vehicle" required ${editing ? 'disabled' : ''}>${vehOptions}</select>
           <div id="aut-vehicle-info" class="field-help" style="margin-top:4px"></div>
         </div>
+        ${_hasDrivers ? driverFieldHTML() : ''}
         <div class="field col-full">
           <label class="field-label">Fornecedor <span class="req">*</span></label>
           <select class="select" name="supplier_id" id="aut-supplier" required ${editing ? 'disabled' : ''}>${supOptions}</select>
@@ -514,7 +550,7 @@ function openAutModal(id) {
   `;
   const footer = `
     <button class="btn btn-outline" data-cancel>Cancelar</button>
-    <button class="btn btn-primary" id="aut-save-btn">${editing ? 'Salvar quantidade' : 'Emitir autorização'}</button>
+    <button class="btn btn-primary" id="aut-save-btn">${editing ? (_hasDrivers ? 'Salvar' : 'Salvar quantidade') : 'Emitir autorização'}</button>
   `;
   const m = openModal({ title: editing ? `Editar Autorização ${a.number}` : 'Nova autorização', body, footer, size: 'lg' });
 
@@ -619,11 +655,19 @@ function openAutModal(id) {
     }
   }
 
+  // Motorista (opcional): ativos da secretaria do veículo e os sem secretaria
+  const driverField = mountDriverField(m, {
+    drivers: _drivers,
+    getVehicle: () => _vehicles.find(x => x.id === vehSel.value),
+    selectedId: a?.driver_id || '',
+  });
+
   vehSel.addEventListener('change', () => {
     refreshVehicleInfo();
     rebuildSupplierOptions();
     refreshFuelOptions();
     refreshSaldo();
+    driverField.refresh();
   });
   supSel.addEventListener('change', () => { refreshFuelOptions(); refreshSaldo(); });
   fuelSel.addEventListener('change', () => {
@@ -696,10 +740,18 @@ async function saveAut(id) {
         p_new_qty: Number(v.authorized_quantity),
       });
       if (error) throw error;
-      toast('Quantidade atualizada.', 'success');
+      // ... e o motorista, quando mudou
+      const before = _items.find(x => x.id === id)?.driver_id || '';
+      const driverChanged = _hasDrivers && (v.driver_id || '') !== before;
+      if (driverChanged) {
+        const r = await supabase.rpc('set_authorization_driver', { p_auth_id: id, p_driver_id: v.driver_id || null });
+        if (r.error) throw r.error;
+      }
+      toast(driverChanged ? 'Autorização atualizada.' : 'Quantidade atualizada.', 'success');
     } else {
-      // Emissão: RPC atômica
-      const { data, error } = await supabase.rpc('emit_authorization', {
+      // Emissão: RPC atômica. Com motorista, a função nova emite e grava o
+      // motorista juntos; sem motorista, a emissão é a de sempre.
+      const args = {
         p_date: v.date,
         p_vehicle_id: v.vehicle_id,
         p_supplier_id: v.supplier_id,
@@ -708,7 +760,10 @@ async function saveAut(id) {
         p_responsible_name: v.responsible_name,
         p_notes: v.notes || null,
         p_fuel_subtype_id: v.fuel_subtype_id ? Number(v.fuel_subtype_id) : null,
-      });
+      };
+      const { data, error } = (_hasDrivers && v.driver_id)
+        ? await supabase.rpc('emit_authorization_with_driver', { ...args, p_driver_id: v.driver_id })
+        : await supabase.rpc('emit_authorization', args);
       if (error) throw error;
       toast('Autorização emitida.', 'success');
       // Abre QR Code automaticamente da nova autorização
@@ -763,6 +818,7 @@ async function openQRModal(id) {
         <div><strong>Fornecedor:</strong> ${esc(sup?.trade_name || sup?.legal_name || a.supplier_trade_name_snapshot)}</div>
         ${sup?.cnpj ? `<div><strong>CNPJ:</strong> ${esc(sup.cnpj)}</div>` : ''}
         <div><strong>Responsável:</strong> ${esc(a.responsible_name)}</div>
+        ${a.driver_name_snapshot ? `<div><strong>Motorista:</strong> ${esc(a.driver_name_snapshot)}</div>` : ''}
         ${a.notes ? `<div style="margin-top:var(--s-2);padding-top:var(--s-2);border-top:1px dashed var(--border)"><strong>Obs:</strong> ${esc(a.notes)}</div>` : ''}
       </div>
       <p style="font-size:11px;color:var(--text-muted);margin-top:var(--s-3)">
@@ -1007,6 +1063,7 @@ async function printAutA4(id) {
         <tr><td class="lbl">Valor estimado</td><td class="big" style="color:#16A34A">${fmtMoney(a.estimated_total)}</td></tr>
         <tr><td class="lbl">Fornecedor</td><td>${esc(a.supplier_trade_name_snapshot)}${sup?.cnpj ? '<br><small>CNPJ ' + esc(sup.cnpj) + '</small>' : ''}</td></tr>
         <tr><td class="lbl">Responsável</td><td>${esc(a.responsible_name)}</td></tr>
+        ${a.driver_name_snapshot ? `<tr><td class="lbl">Motorista</td><td>${esc(a.driver_name_snapshot)}</td></tr>` : ''}
       </table>
       ${a.notes ? `<div class="notes"><b>Observações:</b> ${esc(a.notes)}</div>` : ''}
     </div>
@@ -1046,6 +1103,7 @@ async function printAutThermal(id) {
     `Total: ${fmtMoney(a.estimated_total)}`,
     `Fornecedor: ${a.supplier_trade_name_snapshot}`,
     `Resp: ${a.responsible_name}`,
+    ...(a.driver_name_snapshot ? [`Mot: ${a.driver_name_snapshot}`] : []),
   ].join('\n');
   const qrDataUrl = await QRCode.toDataURL(compactPayload, { width: 400, margin: 2, errorCorrectionLevel: 'L' });
   const orgao = entity?.organ_name || 'Prefeitura Municipal';
@@ -1072,6 +1130,7 @@ async function printAutThermal(id) {
     <div class="row"><span class="lbl">Fornecedor:</span><span class="val-md">${esc(a.supplier_trade_name_snapshot)}</span></div>
     <div class="sep"></div>
     <div class="row"><span class="lbl">Responsável:</span><span class="val-md">${esc(a.responsible_name)}</span></div>
+    ${a.driver_name_snapshot ? `<div class="row"><span class="lbl">Motorista:</span><span class="val-md">${esc(a.driver_name_snapshot)}</span></div>` : ''}
     <div class="rubrica">Rubrica do responsável</div>
     ${a.notes ? `<div class="sep"></div><div><span class="lbl">Obs:</span><span class="val-md">${esc(a.notes)}</span></div>` : ''}
     <div class="sep"></div>

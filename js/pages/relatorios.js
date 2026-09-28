@@ -26,7 +26,12 @@ let _filter = {
   origin: '', // código vehicle_origin (1 próprio, 2 cedido, 3 locado, 4 sublocado, 9 outras)
   type: '', // '' = ambos, 'fueling' = só abast., 'maintenance' = só manut.
   billing: '', // '' = todos, 'with' = com OF, 'without' = sem OF, 'invoiced' = com Termo de Recebimento
+  driver: '',  // nome do motorista gravado no abastecimento; 'none' = sem motorista
 };
+// false quando o banco ainda não recebeu o cadastro de motoristas
+let _hasDrivers = false;
+const NO_DRIVER = 'Sem motorista informado';
+const driverNames = () => [...new Set(_fueling.map(a => a.driver_name_snapshot).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 // false quando o banco ainda não recebeu o apply.sql do faturamento
 let _hasBilling = true;
 const BILLING_LABEL = { with: 'Com Ordem de Fornecimento', without: 'Sem Ordem de Fornecimento', invoiced: 'Com Termo de Recebimento' };
@@ -95,6 +100,9 @@ async function loadAll() {
   _fueling = f.data || [];
   _hasBilling = f.hasBilling;
   if (!_hasBilling) _filter.billing = '';
+  _hasDrivers = f.hasDrivers;
+  if (_filter.driver && _filter.driver !== 'none' && !driverNames().includes(_filter.driver)) _filter.driver = '';
+  if (!driverNames().length) _filter.driver = '';
   _maintenance = m.data || [];
   _vehicles = v.data || [];
   _suppliers = s.data || [];
@@ -126,7 +134,7 @@ function renderFilterCard() {
           </button>
         </div>
       </div>
-      <div class="report-filter-grid ${_hasBilling ? 'has-billing' : ''}">
+      <div class="report-filter-grid rf-n${8 + (_hasBilling ? 1 : 0) + (driverNames().length ? 1 : 0)}">
         <div class="field"><label class="field-label">Data inicial</label><input class="input" type="date" id="rf-from" value="${_filter.from}"></div>
         <div class="field"><label class="field-label">Data final</label><input class="input" type="date" id="rf-to" value="${_filter.to}"></div>
         <div class="field">
@@ -151,6 +159,14 @@ function renderFilterCard() {
             <option value="invoiced">Com termo</option>
           </select>
         </div>` : ''}
+        ${driverNames().length ? `<div class="field rf-driver-field">
+          <label class="field-label">Motorista</label>
+          <select class="select" id="rf-driver">
+            <option value="">Todos</option>
+            <option value="none">Sem motorista</option>
+            ${driverNames().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}
+          </select>
+        </div>` : ''}
         <div class="field"><label class="field-label" style="visibility:hidden">_</label><button class="btn btn-outline" id="rf-clear" style="width:100%">Limpar filtros</button></div>
       </div>
       <div class="report-filter-summary" id="rep-summary"></div>
@@ -169,16 +185,17 @@ function renderFilterCard() {
   if (_filter.origin) document.getElementById('rf-origin').value = _filter.origin;
   if (_filter.type) document.getElementById('rf-type').value = _filter.type;
   if (_filter.billing && _hasBilling) document.getElementById('rf-billing').value = _filter.billing;
+  if (_filter.driver && document.getElementById('rf-driver')) document.getElementById('rf-driver').value = _filter.driver;
 
-  ['rf-from', 'rf-to', 'rf-dept', 'rf-veh', 'rf-sup', 'rf-fuel', 'rf-origin', 'rf-type', 'rf-billing'].forEach(id => {
+  ['rf-from', 'rf-to', 'rf-dept', 'rf-veh', 'rf-sup', 'rf-fuel', 'rf-origin', 'rf-type', 'rf-billing', 'rf-driver'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', (e) => {
-      const map = { 'rf-from': 'from', 'rf-to': 'to', 'rf-dept': 'dept', 'rf-veh': 'vehicle', 'rf-sup': 'supplier', 'rf-fuel': 'fuel', 'rf-origin': 'origin', 'rf-type': 'type', 'rf-billing': 'billing' };
+      const map = { 'rf-from': 'from', 'rf-to': 'to', 'rf-dept': 'dept', 'rf-veh': 'vehicle', 'rf-sup': 'supplier', 'rf-fuel': 'fuel', 'rf-origin': 'origin', 'rf-type': 'type', 'rf-billing': 'billing', 'rf-driver': 'driver' };
       _filter[map[id]] = e.target.value;
       render();
     });
   });
   document.getElementById('rf-clear').addEventListener('click', () => {
-    _filter = { from: '', to: '', dept: '', vehicle: '', supplier: '', fuel: '', origin: '', type: '', billing: '' };
+    _filter = { from: '', to: '', dept: '', vehicle: '', supplier: '', fuel: '', origin: '', type: '', billing: '', driver: '' };
     renderFilterCard();
     render();
   });
@@ -202,6 +219,7 @@ function renderSummary(k) {
   }
   if (_filter.fuel)    parts.push('⛽ ' + (_fuels.find(f => f.code === Number(_filter.fuel))?.description || ''));
   if (_filter.billing) parts.push('🧾 ' + BILLING_LABEL[_filter.billing]);
+  if (_filter.driver)  parts.push('👤 ' + (_filter.driver === 'none' ? 'Sem motorista' : _filter.driver));
   el.innerHTML = `
     <div class="report-summary-filters">${parts.map(p => `<span class="filter-pill">${esc(p)}</span>`).join('') || '<span style="color:var(--text-muted);font-size:12px">Nenhum filtro adicional</span>'}</div>
     <div class="report-summary-stats">
@@ -239,6 +257,8 @@ function filteredFueling() {
     if (_filter.billing === 'with' && !a.supply_order_id) return false;
     if (_filter.billing === 'without' && a.supply_order_id) return false;
     if (_filter.billing === 'invoiced' && !a.invoiced) return false;
+    if (_filter.driver === 'none' && a.driver_name_snapshot) return false;
+    if (_filter.driver && _filter.driver !== 'none' && a.driver_name_snapshot !== _filter.driver) return false;
     if (_filter.dept || _filter.origin) {
       if (!vehicleMatchesFilter(_vehicles.find(x => x.id === a.vehicle_id))) return false;
     }
@@ -355,6 +375,23 @@ function aggBySupplier(abs, man) {
     .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
 }
 
+/** Por motorista: abastecimentos com o nome gravado. Os sem motorista vão para
+ *  uma linha própria, no fim, para o total fechar com o resto do relatório. */
+function aggByDriver(abs) {
+  const acc = new Map();
+  abs.forEach(a => {
+    const name = a.driver_name_snapshot || NO_DRIVER;
+    const r = acc.get(name) || { name, none: !a.driver_name_snapshot, nAbs: 0, litros: 0, km: 0, gasto: 0, vehicles: new Set() };
+    r.nAbs++; r.litros += +a.quantity || 0; r.gasto += +a.total || 0;
+    if (a.km_initial != null && a.km_final != null) r.km += Math.max(0, a.km_final - a.km_initial);
+    r.vehicles.add(a.vehicle_plate_snapshot);
+    acc.set(name, r);
+  });
+  return [...acc.values()]
+    .map(r => ({ ...r, nVeh: r.vehicles.size }))
+    .sort((a, b) => (a.none - b.none) || b.gasto - a.gasto || a.name.localeCompare(b.name));
+}
+
 function aggByFuel(abs) {
   const acc = new Map();
   // Base: combustíveis presentes nos contratos (supplier_fuel) — os que a
@@ -445,6 +482,8 @@ function render() {
   const byVeh = aggByVehicle(abs, man);
   const bySup = aggBySupplier(abs, man);
   const byFuel = aggByFuel(abs);
+  const byDriver = aggByDriver(abs);
+  const showDrivers = _hasDrivers && byDriver.some(r => !r.none);
   const byKind = aggByMaintKind(man);
   const saldos = aggSaldo();
 
@@ -471,6 +510,7 @@ function render() {
     ${section('por-combustivel', '⛽ Por Combustível',
       tblFuel(byFuel),
       hasFuelVals ? chartCanvas('chart-fuel', 230) : '')}
+    ${showDrivers ? section('por-motorista', '👤 Por Motorista', tblDriver(byDriver)) : ''}
     ${section('por-manutencao', '🔧 Manutenções por Categoria', renderKindFilters() + tblMaintKind(byKind))}
     ${section('saldo-contrato', '💰 Saldo Disponível por Fornecedor e Combustível', renderSaldoFilters() + tblSaldo(saldos))}
     ${section('abast-detalhado', '📋 Abastecimentos por Secretaria (detalhado)', tblAbastecimentosPorSec(abs))}
@@ -709,6 +749,20 @@ function tblFuel(rows) {
     ])
   );
 }
+function tblDriver(rows) {
+  if (!rows.length) return tblEmpty();
+  return tableHTML(
+    ['Motorista', 'Veículos', 'Abast.', 'Litros', 'KM', 'Gasto comb.'],
+    rows.map(r => [
+      r.none ? { v: r.name, html: `<span style="color:var(--text-muted)">${esc(r.name)}</span>` } : { v: r.name, html: `<strong>${esc(r.name)}</strong>` },
+      { v: r.nVeh, cls: 'num' },
+      { v: r.nAbs, cls: 'num' },
+      { v: r.litros.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + ' L', cls: 'num' },
+      { v: r.km.toLocaleString('pt-BR'), cls: 'num' },
+      { v: fmtMoney(r.gasto), cls: 'money', style: 'color:var(--success);font-weight:600' },
+    ])
+  );
+}
 function tblMaintKind(rows) {
   if (!rows.length) return tblEmpty('Sem manutenções no período.');
   return tableHTML(
@@ -855,7 +909,9 @@ function tblAbastecimentosPorSec(absList) {
             return `<tr>
               <td data-label="Data">${esc(fmtDate(a.date))}</td>
               <td data-label="Nº Autorização" style="font-family:ui-monospace,monospace;font-size:11.5px">${esc(autNum)}</td>
-              <td data-label="Veículo"><strong>${esc(formatPlate(a.vehicle_plate_snapshot))}</strong></td>
+              <td data-label="Veículo">${a.driver_name_snapshot
+                ? `<div class="cell-stack"><strong>${esc(formatPlate(a.vehicle_plate_snapshot))}</strong><span class="of-sub" title="Motorista">${esc(a.driver_name_snapshot)}</span></div>`
+                : `<strong>${esc(formatPlate(a.vehicle_plate_snapshot))}</strong>`}</td>
               <td data-label="Combustível">${esc(_fuels.find(f => f.code === a.fuel_type_code)?.description || `Cód ${a.fuel_type_code}`)}</td>
               <td data-label="Qtd" class="num">${Number(a.quantity).toFixed(2)} L</td>
               <td data-label="R$/L" class="num">${Number(a.unit_price).toFixed(3)}</td>
@@ -982,6 +1038,15 @@ function getSectionData(sec) {
       cols: ['Combustível', 'Abast.', 'Litros', 'Preço Médio', 'Gasto Total'],
       rows: aggByFuel(abs).map(r => [r.description, r.nAbs, +r.litros.toFixed(2), +r.pricMed.toFixed(3), +r.gasto.toFixed(2)]),
     };
+    case 'por-motorista': {
+      const rows = aggByDriver(abs);
+      if (!_hasDrivers || !rows.some(r => !r.none)) return { title: 'Por Motorista', cols: [], rows: [] };
+      return {
+        title: 'Por Motorista',
+        cols: ['Motorista', 'Veículos', 'Abast.', 'Litros', 'KM Rodado', 'Gasto Combustível'],
+        rows: rows.map(r => [r.name, r.nVeh, r.nAbs, +r.litros.toFixed(2), r.km, +r.gasto.toFixed(2)]),
+      };
+    }
     case 'por-manutencao': return {
       title: 'Manutenções por Categoria',
       cols: ['Categoria', 'Quantidade', 'Gasto Total', 'Ticket Médio'],
@@ -994,7 +1059,8 @@ function getSectionData(sec) {
     };
     case 'abast-detalhado': {
       // Lista achatada com Secretaria como primeira coluna, ordenada por sec
-      // depois data desc.
+      // depois data desc. A coluna Motorista só entra quando algum tem motorista.
+      const withDriver = _hasDrivers && abs.some(a => a.driver_name_snapshot);
       const rows = [...abs]
         .sort((a, b) => {
           const va = _vehicles.find(x => x.id === a.vehicle_id);
@@ -1019,11 +1085,13 @@ function getSectionData(sec) {
             +Number(a.total).toFixed(2),
             a.responsible_name || '',
             a.supplier_trade_name_snapshot || '',
+            ...(withDriver ? [a.driver_name_snapshot || ''] : []),
           ];
         });
       return {
         title: 'Abastecimentos por Secretaria',
-        cols: ['Sigla', 'Secretaria', 'Data', 'Nº Autorização', 'Veículo', 'Combustível', 'Qtd (L)', 'R$/L', 'Total (R$)', 'Responsável', 'Fornecedor'],
+        cols: ['Sigla', 'Secretaria', 'Data', 'Nº Autorização', 'Veículo', 'Combustível', 'Qtd (L)', 'R$/L', 'Total (R$)', 'Responsável', 'Fornecedor',
+               ...(withDriver ? ['Motorista'] : [])],
         rows,
       };
     }
@@ -1066,7 +1134,7 @@ async function exportSection(sec, fmt) {
 // EXPORT TUDO (XLSX e PDF)
 // =============================================================================
 function exportAllXLSX() {
-  const sections = ['por-secretaria', 'por-veiculo', 'por-fornecedor', 'por-combustivel', 'por-manutencao', 'saldo-contrato', 'abast-detalhado'];
+  const sections = ['por-secretaria', 'por-veiculo', 'por-fornecedor', 'por-combustivel', 'por-motorista', 'por-manutencao', 'saldo-contrato', 'abast-detalhado'];
   const datas = sections.map(getSectionData).filter(d => d?.rows.length);
   if (!datas.length) { toast('Sem dados para exportar.', 'warning'); return; }
   const wb = XLSX.utils.book_new();
@@ -1128,7 +1196,7 @@ async function exportPDFCustom(title, cols, rows, extraHTML = '') {
 }
 
 async function exportPDF() {
-  const sections = ['por-secretaria', 'por-veiculo', 'por-fornecedor', 'por-combustivel', 'por-manutencao', 'saldo-contrato', 'abast-detalhado'];
+  const sections = ['por-secretaria', 'por-veiculo', 'por-fornecedor', 'por-combustivel', 'por-motorista', 'por-manutencao', 'saldo-contrato', 'abast-detalhado'];
   const datas = sections.map(s => ({ key: s, ...getSectionData(s) })).filter(d => d.rows && d.rows.length);
   if (!datas.length) { toast('Sem dados para imprimir.', 'warning'); return; }
   const entity = await getEntity();

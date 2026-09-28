@@ -5,6 +5,7 @@ import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 import { openPrintTab } from '../thermal.js';
 import { applyInvoicedTotals } from '../billing.js';
+import { loadDriversForPick, driverFieldHTML, mountDriverField } from '../drivers.js';
 
 let _items = [];
 let _vehicles = [];
@@ -14,7 +15,10 @@ let _fuels = [];
 let _fuelSubs = [];
 let _depts = [];
 let _emittedAuths = []; // só as 'emitida' pra import
-let _filter = { search: '', vehicle: '', dept: '', supplier: '', fuel: '', month: '', billing: '' };
+let _filter = { search: '', vehicle: '', dept: '', supplier: '', fuel: '', month: '', billing: '', driver: '' };
+// Motoristas para escolha. _hasDrivers = false: banco ainda sem o cadastro, a tela segue sem o campo.
+let _drivers = [];
+let _hasDrivers = false;
 // false quando o banco ainda não recebeu o apply.sql do faturamento
 let _hasBilling = true;
 const LOCKED_MSG = (a) => a.supply_order?.status === 'faturada'
@@ -66,6 +70,7 @@ export async function renderAbastecimentos() {
           <option value="without">Sem Ordem de Fornecimento</option>
           <option value="with">Com Ordem de Fornecimento</option>
         </select>
+        <select class="select chip" id="ff-driver" aria-label="Motorista" hidden></select>
         <button class="btn btn-ghost btn-sm" id="ff-clear" hidden>Limpar filtros</button>
       </div>
       <div id="abs-tablebox">
@@ -96,9 +101,10 @@ export async function renderAbastecimentos() {
   document.getElementById('ff-fuel').addEventListener('change', e => { _filter.fuel     = e.target.value; updateClear(); renderTable(); renderStats(); });
   document.getElementById('ff-month').addEventListener('change',e => { _filter.month    = e.target.value; updateClear(); renderTable(); renderStats(); });
   document.getElementById('ff-billing').addEventListener('change',e => { _filter.billing = e.target.value; updateClear(); renderTable(); renderStats(); });
+  document.getElementById('ff-driver').addEventListener('change',e => { _filter.driver = e.target.value; updateClear(); renderTable(); renderStats(); });
   document.getElementById('ff-clear').addEventListener('click', () => {
-    _filter = { search: _filter.search, vehicle: '', dept: '', supplier: '', fuel: '', month: '', billing: '' };
-    ['ff-veh', 'ff-dept', 'ff-sup', 'ff-fuel', 'ff-month', 'ff-billing'].forEach(id => document.getElementById(id).value = '');
+    _filter = { search: _filter.search, vehicle: '', dept: '', supplier: '', fuel: '', month: '', billing: '', driver: '' };
+    ['ff-veh', 'ff-dept', 'ff-sup', 'ff-fuel', 'ff-month', 'ff-billing', 'ff-driver'].forEach(id => document.getElementById(id).value = '');
     updateClear(); renderTable(); renderStats();
   });
 
@@ -109,7 +115,7 @@ export async function renderAbastecimentos() {
 }
 
 function updateClear() {
-  const any = _filter.vehicle || _filter.dept || _filter.supplier || _filter.fuel || _filter.month || _filter.billing;
+  const any = _filter.vehicle || _filter.dept || _filter.supplier || _filter.fuel || _filter.month || _filter.billing || _filter.driver;
   document.getElementById('ff-clear').hidden = !any;
 }
 
@@ -123,11 +129,14 @@ const FUELING_COLS = `
 const fuelingQuery = (cols) => supabase.from('fueling').select(cols)
   .is('deleted_at', null).order('date', { ascending: false }).order('created_at', { ascending: false });
 
+const BILLING_COLS = ', supply_order_id, invoiced_total, supply_order:supply_order_id(number, status)';
+const DRIVER_COLS = ', driver_id, driver_name_snapshot';
+
 async function loadAll() {
-  let [a, v, s, sf, ft, fs, d, ea] = await Promise.all([
-    fuelingQuery(FUELING_COLS + ', supply_order_id, invoiced_total, supply_order:supply_order_id(number, status)'),
+  let [a, v, s, sf, ft, fs, d, ea, drv] = await Promise.all([
+    fuelingQuery(FUELING_COLS + BILLING_COLS + DRIVER_COLS),
     supabase.from('vehicle').select(`
-      id, plate, model, brand, current_km, tank_capacity, fuel_type_code, fuel_subtype_id,
+      id, plate, model, brand, current_km, tank_capacity, fuel_type_code, fuel_subtype_id, vehicle_type_code,
       department_id, department:department_id(acronym, name)
     `).is('deleted_at', null).order('plate'),
     supabase.from('supplier').select(`
@@ -143,12 +152,16 @@ async function loadAll() {
       authorized_quantity, unit_price_snapshot, responsible_name,
       vehicle_plate_snapshot, vehicle_model_snapshot, supplier_trade_name_snapshot
     `).eq('status', 'emitida').is('deleted_at', null).order('date', { ascending: false }),
+    loadDriversForPick(),
   ]);
+  // Banco em versão anterior: tenta sem o motorista; depois sem o faturamento
+  const missing = (r) => r.error && (isMissingColumn(r.error) || /supply_order|driver/i.test(r.error.message || ''));
   _hasBilling = true;
-  if (a.error && (isMissingColumn(a.error) || /supply_order/i.test(a.error.message || ''))) {
-    _hasBilling = false;
-    a = await fuelingQuery(FUELING_COLS);
-  }
+  let hasDriverCols = true;
+  if (missing(a)) { hasDriverCols = false; a = await fuelingQuery(FUELING_COLS + BILLING_COLS); }
+  if (missing(a)) { _hasBilling = false; a = await fuelingQuery(FUELING_COLS); }
+  _drivers = drv.drivers;
+  _hasDrivers = drv.available && hasDriverCols;
   if (a.error) { toast('Falha ao carregar abastecimentos: ' + a.error.message, 'error'); _items = []; }
   else _items = applyInvoicedTotals(a.data || []);   // total = valor do termo, quando houver
   _vehicles = v.data || [];
@@ -173,6 +186,14 @@ function fillFilterSelects() {
   if (_filter.dept)    document.getElementById('ff-dept').value = _filter.dept;
   if (_filter.supplier) document.getElementById('ff-sup').value = _filter.supplier;
   if (_filter.fuel)    document.getElementById('ff-fuel').value = _filter.fuel;
+  // Filtro de motorista: só aparece quando algum abastecimento tem motorista
+  const fd = document.getElementById('ff-driver');
+  const names = [...new Set(_items.map(a => a.driver_name_snapshot).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  if (_filter.driver && _filter.driver !== 'none' && !names.includes(_filter.driver)) _filter.driver = '';
+  fd.hidden = !names.length;
+  fd.innerHTML = '<option value="">Todos motoristas</option><option value="none">Sem motorista</option>' +
+    names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  fd.value = _filter.driver;
   const fb = document.getElementById('ff-billing');
   fb.hidden = !_hasBilling;
   if (!_hasBilling) _filter.billing = '';
@@ -197,6 +218,8 @@ function applyFilters() {
     if (_filter.month && String(a.date).slice(0, 7) !== _filter.month) return false;
     if (_filter.billing === 'with' && !a.supply_order_id) return false;
     if (_filter.billing === 'without' && a.supply_order_id) return false;
+    if (_filter.driver === 'none' && a.driver_name_snapshot) return false;
+    if (_filter.driver && _filter.driver !== 'none' && a.driver_name_snapshot !== _filter.driver) return false;
     if (_filter.dept) {
       const veh = _vehicles.find(x => x.id === a.vehicle_id);
       if (veh?.department_id !== _filter.dept) return false;
@@ -204,7 +227,8 @@ function applyFilters() {
     if (!t) return true;
     return (a.vehicle_plate_snapshot || '').toLowerCase().includes(t)
         || (a.supplier_trade_name_snapshot || '').toLowerCase().includes(t)
-        || (a.responsible_name || '').toLowerCase().includes(t);
+        || (a.responsible_name || '').toLowerCase().includes(t)
+        || (a.driver_name_snapshot || '').toLowerCase().includes(t);
   });
 }
 
@@ -236,7 +260,7 @@ function renderTable() {
   }
   const filtered = applyFilters();
   if (countEl) {
-    const any = _filter.search || _filter.vehicle || _filter.dept || _filter.supplier || _filter.fuel || _filter.month || _filter.billing;
+    const any = _filter.search || _filter.vehicle || _filter.dept || _filter.supplier || _filter.fuel || _filter.month || _filter.billing || _filter.driver;
     countEl.textContent = any ? `${filtered.length} de ${_items.length} registro(s)` : `${_items.length} registro(s)`;
   }
   if (!filtered.length) {
@@ -284,7 +308,9 @@ function absRow(a) {
   return `
     <tr>
       <td data-label="Data" style="white-space:nowrap">${esc(fmtDate(a.date))}</td>
-      <td data-label="Veículo"><strong>${esc(formatPlate(a.vehicle_plate_snapshot))}</strong></td>
+      <td data-label="Veículo">${a.driver_name_snapshot
+        ? `<div class="cell-stack"><strong>${esc(formatPlate(a.vehicle_plate_snapshot))}</strong><span class="of-sub" title="Motorista">${esc(a.driver_name_snapshot)}</span></div>`
+        : `<strong>${esc(formatPlate(a.vehicle_plate_snapshot))}</strong>`}</td>
       <td data-label="Combustível">${esc(fuelLabel(a.fuel_type_code, a.fuel_subtype_id))}</td>
       <td data-label="Qtd" style="white-space:nowrap">${Number(a.quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L</td>
       <td data-label="R$/L" style="white-space:nowrap">${Number(a.unit_price).toFixed(3)}</td>
@@ -429,6 +455,9 @@ function openAbsModal(id, fromAuth = null) {
   }
 
   const isLinked = !!initial.authorization_id;
+  // Abastecimento novo vindo de autorização herda o motorista dela (no banco);
+  // nos outros casos o motorista é escolhido aqui.
+  const showDriver = editing || !isLinked;
   const vehOptions = '<option value="">— Selecione —</option>' +
     _vehicles.map(v => `<option value="${v.id}" ${initial.vehicle_id === v.id ? 'selected' : ''}>${esc(formatPlate(v.plate))} — ${esc(v.model)} (${esc(v.department?.acronym || '—')})</option>`).join('');
   // Quando é abast. vinculado a autorização, o fornecedor já vem fixo e o
@@ -464,6 +493,7 @@ function openAbsModal(id, fromAuth = null) {
           <input type="hidden" name="vehicle_id_h" value="${initial.vehicle_id}">
           <div id="abs-veh-info" class="field-help" style="margin-top:4px"></div>
         </div>
+        ${_hasDrivers && showDriver ? driverFieldHTML() : ''}
         <div class="field col-full">
           <label class="field-label">Fornecedor <span class="req">*</span></label>
           <select class="select" name="supplier_id" id="abs-sup" required ${isLinked ? 'disabled' : ''}>${supOptions}</select>
@@ -595,6 +625,13 @@ function openAbsModal(id, fromAuth = null) {
   qtyIn.addEventListener('input', refreshTotal);
   upIn.addEventListener('input', refreshTotal);
 
+  const driverField = mountDriverField(m, {
+    drivers: _drivers,
+    getVehicle: () => _vehicles.find(x => x.id === vehSel.value || x.id === vehHid.value),
+    selectedId: a?.driver_id || '',
+  });
+  vehSel.addEventListener('change', () => driverField.refresh());
+
   refreshVehInfo();
   rebuildSupplierOptions(initial.supplier_id || '');
   refreshFuelOptions();
@@ -649,6 +686,8 @@ async function saveAbs(id, initial) {
     department_acronym_snapshot: veh?.department?.acronym || null,
     supplier_trade_name_snapshot: sup?.trade_name || sup?.legal_name || '',
   };
+  // Só envia o motorista quando o campo existe (banco sem o cadastro segue igual)
+  if (form.querySelector('[name="driver_id"]')) payload.driver_id = v.driver_id || null;
 
   const btn = document.getElementById('abs-save-btn');
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Salvando...';

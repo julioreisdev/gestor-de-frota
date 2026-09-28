@@ -74,18 +74,20 @@ export function applyInvoicedTotals(rows) {
   });
   return rows;
 }
-/** Consulta abastecimentos pedindo também os dados do faturamento.
- *  build(colunas extras) devolve a consulta. Banco ainda sem as colunas: repete sem elas.
- *  Devolve { data, error, hasBilling }. */
+/** Consulta abastecimentos pedindo também os dados do faturamento e do motorista.
+ *  build(colunas extras) devolve a consulta. Banco em versão anterior: repete sem
+ *  o motorista e, se preciso, sem o faturamento.
+ *  Devolve { data, error, hasBilling, hasDrivers }. */
 export async function queryFuelings(build) {
-  let res = await build(', supply_order_id, invoiced_total');
-  let hasBilling = true;
-  if (res.error && (res.error.code === '42703' || /supply_order_id|invoiced_total/i.test(res.error.message || ''))) {
-    hasBilling = false;
-    res = await build('');
-  }
+  const BILLING = ', supply_order_id, invoiced_total', DRIVER = ', driver_id, driver_name_snapshot';
+  const missing = (r) => r.error && (r.error.code === '42703'
+    || /supply_order_id|invoiced_total|driver_id|driver_name_snapshot/i.test(r.error.message || ''));
+  let hasBilling = true, hasDrivers = true;
+  let res = await build(BILLING + DRIVER);
+  if (missing(res)) { hasDrivers = false; res = await build(BILLING); }
+  if (missing(res)) { hasBilling = false; res = await build(''); }
   if (!res.error) applyInvoicedTotals(res.data);
-  return { ...res, hasBilling };
+  return { ...res, hasBilling, hasDrivers };
 }
 
 /** Tabela ou função do faturamento ainda não existe: o apply.sql não foi executado. */

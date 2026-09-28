@@ -3418,6 +3418,189 @@ revoke all on function save_driver(uuid, jsonb, jsonb) from public;
 grant execute on function save_driver(uuid, jsonb, jsonb) to authenticated;
 
 -- =============================================================================
+-- 19) MOTORISTAS — motorista na autorização e no abastecimento
+--   Sempre opcional. O nome é gravado como cópia: renomear ou inativar o
+--   motorista depois não muda autorização nem abastecimento já emitidos.
+--   As funções de emissão que já existiam NÃO mudam: as novas chamam as
+--   antigas e gravam o motorista na mesma transação. Emissão sem motorista
+--   continua exatamente como era.
+-- Idempotente.
+-- =============================================================================
+
+alter table fueling_authorization add column if not exists driver_id uuid references driver(id);
+alter table fueling_authorization add column if not exists driver_name_snapshot text;
+alter table service_authorization add column if not exists driver_id uuid references driver(id);
+alter table service_authorization add column if not exists driver_name_snapshot text;
+alter table fueling               add column if not exists driver_id uuid references driver(id);
+alter table fueling               add column if not exists driver_name_snapshot text;
+alter table maintenance           add column if not exists driver_id uuid references driver(id);
+alter table maintenance           add column if not exists driver_name_snapshot text;
+create index if not exists ix_auth_driver        on fueling_authorization (driver_id) where driver_id is not null;
+create index if not exists ix_servauth_driver    on service_authorization (driver_id) where driver_id is not null;
+create index if not exists ix_fueling_driver     on fueling (driver_id) where driver_id is not null;
+create index if not exists ix_maintenance_driver on maintenance (driver_id) where driver_id is not null;
+
+-- Nome do motorista para gravar na cópia. Falha se não existe ou está inativo.
+create or replace function _driver_name_for_use(p_driver_id uuid) returns text
+language plpgsql stable security definer set search_path = public, auth as $$
+declare v_name text; v_active boolean;
+begin
+  if current_user_role() is null or current_user_role() not in ('admin','usuario') then
+    raise exception 'Seu perfil não pode escolher o motorista.' using errcode = '42501';
+  end if;
+  select full_name, active into v_name, v_active from driver where id = p_driver_id;
+  if v_name is null then raise exception 'Motorista não encontrado.'; end if;
+  if not v_active then raise exception 'O motorista % está inativo.', v_name; end if;
+  return v_name;
+end;
+$$;
+revoke all on function _driver_name_for_use(uuid) from public;
+grant execute on function _driver_name_for_use(uuid) to authenticated;
+
+-- Linha "Motorista: nome" no texto do QR Code, antes de "Situação".
+create or replace function _qr_with_driver(p_qr text, p_name text) returns text
+language plpgsql immutable as $$
+declare v text := regexp_replace(coalesce(p_qr, ''), E'\nMotorista: [^\n]*', '');
+begin
+  if p_name is null then return v; end if;
+  if position(E'\nSituação:' in v) > 0 then
+    return replace(v, E'\nSituação:', E'\nMotorista: ' || p_name || E'\nSituação:');
+  end if;
+  return v || E'\nMotorista: ' || p_name;
+end;
+$$;
+
+-- Informa, troca ou tira (p_driver_id nulo) o motorista de uma autorização de
+-- abastecimento. Só enquanto está emitida.
+create or replace function set_authorization_driver(p_auth_id uuid, p_driver_id uuid) returns void
+language plpgsql security definer set search_path = public, auth as $$
+declare v_status authorization_status; v_qr text; v_name text;
+begin
+  if current_user_role() is null or current_user_role() not in ('admin','usuario') then
+    raise exception 'Seu perfil não pode alterar o motorista.' using errcode = '42501';
+  end if;
+  select status, qr_payload into v_status, v_qr
+    from fueling_authorization where id = p_auth_id and deleted_at is null for update;
+  if v_status is null then raise exception 'Autorização não encontrada.'; end if;
+  if v_status <> 'emitida' then raise exception 'Só autorização emitida pode ter o motorista alterado.'; end if;
+  if p_driver_id is not null then v_name := _driver_name_for_use(p_driver_id); end if;
+  update fueling_authorization
+     set driver_id = p_driver_id, driver_name_snapshot = v_name, qr_payload = _qr_with_driver(v_qr, v_name)
+   where id = p_auth_id;
+end;
+$$;
+revoke all on function set_authorization_driver(uuid, uuid) from public;
+grant execute on function set_authorization_driver(uuid, uuid) to authenticated;
+
+create or replace function set_service_authorization_driver(p_auth_id uuid, p_driver_id uuid) returns void
+language plpgsql security definer set search_path = public, auth as $$
+declare v_status authorization_status; v_qr text; v_name text;
+begin
+  if current_user_role() is null or current_user_role() not in ('admin','usuario') then
+    raise exception 'Seu perfil não pode alterar o motorista.' using errcode = '42501';
+  end if;
+  select status, qr_payload into v_status, v_qr
+    from service_authorization where id = p_auth_id and deleted_at is null for update;
+  if v_status is null then raise exception 'Autorização não encontrada.'; end if;
+  if v_status <> 'emitida' then raise exception 'Só autorização emitida pode ter o motorista alterado.'; end if;
+  if p_driver_id is not null then v_name := _driver_name_for_use(p_driver_id); end if;
+  update service_authorization
+     set driver_id = p_driver_id, driver_name_snapshot = v_name, qr_payload = _qr_with_driver(v_qr, v_name)
+   where id = p_auth_id;
+end;
+$$;
+revoke all on function set_service_authorization_driver(uuid, uuid) from public;
+grant execute on function set_service_authorization_driver(uuid, uuid) to authenticated;
+
+-- Emissão com motorista: chama a emissão de sempre e grava o motorista.
+-- Se o motorista for recusado, a autorização não é emitida (tudo ou nada).
+create or replace function emit_authorization_with_driver(
+  p_date date,
+  p_vehicle_id uuid,
+  p_supplier_id uuid,
+  p_fuel_type_code smallint,
+  p_quantity numeric,
+  p_responsible_name text,
+  p_driver_id uuid,
+  p_notes text default null,
+  p_fuel_subtype_id smallint default null
+) returns uuid
+language plpgsql security definer set search_path = public, auth as $$
+declare v_id uuid;
+begin
+  v_id := emit_authorization(p_date, p_vehicle_id, p_supplier_id, p_fuel_type_code, p_quantity,
+                             p_responsible_name, p_notes, p_fuel_subtype_id);
+  if p_driver_id is not null then perform set_authorization_driver(v_id, p_driver_id); end if;
+  return v_id;
+end;
+$$;
+revoke all on function emit_authorization_with_driver(date,uuid,uuid,smallint,numeric,text,uuid,text,smallint) from public;
+grant execute on function emit_authorization_with_driver(date,uuid,uuid,smallint,numeric,text,uuid,text,smallint) to authenticated;
+
+create or replace function emit_service_authorization_with_driver(
+  p_date date,
+  p_vehicle_id uuid,
+  p_supplier_id uuid,
+  p_service_kind service_kind,
+  p_description text,
+  p_estimated_value numeric,
+  p_responsible_name text,
+  p_driver_id uuid,
+  p_notes text default null
+) returns uuid
+language plpgsql security definer set search_path = public, auth as $$
+declare v_id uuid;
+begin
+  v_id := emit_service_authorization(p_date, p_vehicle_id, p_supplier_id, p_service_kind, p_description,
+                                     p_estimated_value, p_responsible_name, p_notes);
+  if p_driver_id is not null then perform set_service_authorization_driver(v_id, p_driver_id); end if;
+  return v_id;
+end;
+$$;
+revoke all on function emit_service_authorization_with_driver(date,uuid,uuid,service_kind,text,numeric,text,uuid,text) from public;
+grant execute on function emit_service_authorization_with_driver(date,uuid,uuid,service_kind,text,numeric,text,uuid,text) to authenticated;
+
+-- Abastecimento: vindo de autorização, herda o motorista dela; manual, grava o
+-- nome do motorista escolhido.
+create or replace function fueling_set_driver() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'INSERT' and new.driver_id is null and new.authorization_id is not null then
+    select a.driver_id, a.driver_name_snapshot into new.driver_id, new.driver_name_snapshot
+      from fueling_authorization a where a.id = new.authorization_id;
+  elsif new.driver_id is null then
+    new.driver_name_snapshot := null;
+  elsif tg_op = 'INSERT' or new.driver_id is distinct from old.driver_id then
+    select d.full_name into new.driver_name_snapshot from driver d where d.id = new.driver_id;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_fueling_set_driver on fueling;
+create trigger trg_fueling_set_driver
+  before insert or update on fueling
+  for each row execute function fueling_set_driver();
+
+create or replace function maintenance_set_driver() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'INSERT' and new.driver_id is null and new.authorization_id is not null then
+    select a.driver_id, a.driver_name_snapshot into new.driver_id, new.driver_name_snapshot
+      from service_authorization a where a.id = new.authorization_id;
+  elsif new.driver_id is null then
+    new.driver_name_snapshot := null;
+  elsif tg_op = 'INSERT' or new.driver_id is distinct from old.driver_id then
+    select d.full_name into new.driver_name_snapshot from driver d where d.id = new.driver_id;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_maintenance_set_driver on maintenance;
+create trigger trg_maintenance_set_driver
+  before insert or update on maintenance
+  for each row execute function maintenance_set_driver();
+
+-- =============================================================================
 -- 13) Força reload do schema cache do PostgREST
 -- =============================================================================
 notify pgrst, 'reload schema';

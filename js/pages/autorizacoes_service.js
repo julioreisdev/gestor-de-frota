@@ -1,10 +1,11 @@
 import { getEntity } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel, supplierCellHTML } from '../ui.js';
+import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, supplierOptionLabel, supplierCellHTML, isMissingColumn } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 import QRCode from 'https://esm.sh/qrcode@1.5.3';
 import { openPrintTab, openThermalPDF, hasChosenThermalWidth, askThermalWidth } from '../thermal.js';
+import { loadDriversForPick, driverFieldHTML, mountDriverField } from '../drivers.js';
 
 const STATUS_LABEL = { emitida: 'Emitida', utilizada: 'Utilizada', cancelada: 'Cancelada' };
 const STATUS_BADGE = { emitida: 'badge badge-warning', utilizada: 'badge badge-success', cancelada: 'badge badge-danger' };
@@ -14,7 +15,10 @@ const KIND_BADGE = { preventiva: 'badge badge-success', corretiva: 'badge badge-
 let _items = [];
 let _vehicles = [];
 let _suppliers = [];
-let _filter = { search: '', status: '', month: '', kind: '' };
+let _filter = { search: '', status: '', month: '', kind: '', driver: '' };
+// Motoristas para escolha. _hasDrivers = false: banco ainda sem o cadastro, a tela segue sem o campo.
+let _drivers = [];
+let _hasDrivers = false;
 
 const isFornecedor = () => getProfile()?.role === 'fornecedor';
 
@@ -62,6 +66,7 @@ export async function renderServiceTab(container) {
           <option value="outros">Outros</option>
         </select>
         <input class="input chip" type="month" id="ffs-month" value="${esc(_filter.month)}">
+        <select class="select chip" id="ffs-driver" aria-label="Motorista" hidden></select>
         <button class="btn btn-ghost btn-sm" id="ffs-clear" hidden>Limpar filtros</button>
       </div>
       <div id="srv-tablebox">
@@ -88,8 +93,9 @@ export async function renderServiceTab(container) {
   document.getElementById('ffs-status').addEventListener('change', (e) => { _filter.status = e.target.value; updateClear(); renderTable(); });
   document.getElementById('ffs-kind').addEventListener('change',   (e) => { _filter.kind   = e.target.value; updateClear(); renderTable(); });
   document.getElementById('ffs-month').addEventListener('change',  (e) => { _filter.month  = e.target.value; updateClear(); renderTable(); });
+  document.getElementById('ffs-driver').addEventListener('change', (e) => { _filter.driver = e.target.value; updateClear(); renderTable(); });
   document.getElementById('ffs-clear').addEventListener('click', () => {
-    _filter = { search: _filter.search, status: '', month: '', kind: '' };
+    _filter = { search: _filter.search, status: '', month: '', kind: '', driver: '' };
     document.getElementById('ffs-status').value = '';
     document.getElementById('ffs-kind').value = '';
     document.getElementById('ffs-month').value = '';
@@ -103,21 +109,34 @@ export async function renderServiceTab(container) {
 }
 
 function updateClear() {
-  const any = _filter.status || _filter.month || _filter.kind;
+  const any = _filter.status || _filter.month || _filter.kind || _filter.driver;
   document.getElementById('ffs-clear').hidden = !any;
 }
 
+/** Filtro de motorista: só aparece quando alguma autorização tem motorista. */
+function fillDriverFilter() {
+  const sel = document.getElementById('ffs-driver');
+  if (!sel) return;
+  const names = [...new Set(_items.map(a => a.driver_name_snapshot).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  if (_filter.driver && _filter.driver !== 'none' && !names.includes(_filter.driver)) _filter.driver = '';
+  sel.hidden = !names.length;
+  sel.innerHTML = '<option value="">Todos motoristas</option><option value="none">Sem motorista</option>' +
+    names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  sel.value = _filter.driver;
+}
+
 async function loadAll() {
-  const [a, v, s] = await Promise.all([
-    supabase.from('service_authorization').select(`
+  const srvQuery = (extra) => supabase.from('service_authorization').select(`
       id, number, date, status, vehicle_id, supplier_id, service_kind,
       description, estimated_value, responsible_name, notes,
       vehicle_plate_snapshot, vehicle_model_snapshot,
       department_acronym_snapshot, supplier_trade_name_snapshot,
-      qr_payload, created_at
-    `).is('deleted_at', null).order('date', { ascending: false }).order('number', { ascending: false }),
+      qr_payload, created_at${extra}
+    `).is('deleted_at', null).order('date', { ascending: false }).order('number', { ascending: false });
+  let [a, v, s, drv] = await Promise.all([
+    srvQuery(', driver_id, driver_name_snapshot'),
     supabase.from('vehicle').select(`
-      id, plate, model, brand, current_km,
+      id, plate, model, brand, current_km, vehicle_type_code,
       department_id, department:department_id(acronym, name)
     `).is('deleted_at', null).order('plate'),
     supabase.from('supplier').select(`
@@ -125,7 +144,13 @@ async function loadAll() {
       department_id, contract_number,
       department:department_id(acronym, name)
     `).in('kind', ['mecanica', 'ambos']).order('legal_name'),
+    isFornecedor() ? Promise.resolve({ drivers: [], available: false }) : loadDriversForPick(),
   ]);
+  // Banco ainda sem as colunas do motorista: carrega como antes, sem o campo
+  let hasDriverCols = true;
+  if (a.error && isMissingColumn(a.error)) { hasDriverCols = false; a = await srvQuery(''); }
+  _drivers = drv.drivers;
+  _hasDrivers = drv.available && hasDriverCols;
   if (a.error) { toast('Falha ao carregar autorizações: ' + a.error.message, 'error'); _items = []; }
   else _items = a.data || [];
   _vehicles = v.data || [];
@@ -138,11 +163,14 @@ function applyFilters() {
     if (_filter.status && a.status !== _filter.status) return false;
     if (_filter.kind && a.service_kind !== _filter.kind) return false;
     if (_filter.month && String(a.date).slice(0, 7) !== _filter.month) return false;
+    if (_filter.driver === 'none' && a.driver_name_snapshot) return false;
+    if (_filter.driver && _filter.driver !== 'none' && a.driver_name_snapshot !== _filter.driver) return false;
     if (!t) return true;
     return (a.number || '').toLowerCase().includes(t)
         || (a.vehicle_plate_snapshot || '').toLowerCase().includes(t)
         || (a.supplier_trade_name_snapshot || '').toLowerCase().includes(t)
         || (a.responsible_name || '').toLowerCase().includes(t)
+        || (a.driver_name_snapshot || '').toLowerCase().includes(t)
         || (a.description || '').toLowerCase().includes(t);
   });
 }
@@ -150,6 +178,7 @@ function applyFilters() {
 function renderTable() {
   const box = document.getElementById('srv-tablebox');
   const countEl = document.getElementById('srv-count');
+  fillDriverFilter();
   if (!_items.length) {
     if (countEl) countEl.textContent = '';
     box.innerHTML = `
@@ -162,7 +191,7 @@ function renderTable() {
   }
   const filtered = applyFilters();
   if (countEl) {
-    const any = _filter.search || _filter.status || _filter.month || _filter.kind;
+    const any = _filter.search || _filter.status || _filter.month || _filter.kind || _filter.driver;
     countEl.textContent = any
       ? `${filtered.length} de ${_items.length} autorização(ões)`
       : `${_items.length} autorização(ões)`;
@@ -225,7 +254,9 @@ function srvRow(a) {
       <td data-label="Serviço" style="font-size:12.5px;max-width:300px"><div class="cell-stack"><span style="white-space:normal">${esc(a.description)}</span></div></td>
       <td data-label="Valor est." style="white-space:nowrap;color:var(--success);font-weight:500">${fmtMoney(a.estimated_value)}</td>
       <td data-label="Mecânica">${supplierCellHTML(a.supplier_trade_name_snapshot, _suppliers.find(s => s.id === a.supplier_id))}</td>
-      <td data-label="Responsável" style="font-size:12.5px">${esc(a.responsible_name)}</td>
+      <td data-label="Responsável" style="font-size:12.5px">${a.driver_name_snapshot
+        ? `<div class="cell-stack"><span>${esc(a.responsible_name)}</span><span class="of-sub">Motorista: ${esc(a.driver_name_snapshot)}</span></div>`
+        : esc(a.responsible_name)}</td>
       <td data-label="Situação"><span class="${STATUS_BADGE[a.status]}">${esc(STATUS_LABEL[a.status])}</span></td>
       <td class="actions-col">
         <div class="actions-row">
@@ -273,6 +304,7 @@ function openSrvModal(id) {
           <label class="field-label">Veículo <span class="req">*</span></label>
           <select class="select" name="vehicle_id" id="srv-vehicle" required ${editing ? 'disabled' : ''}>${vehOptions}</select>
         </div>
+        ${_hasDrivers ? driverFieldHTML() : ''}
         <div class="field col-full">
           <label class="field-label">Mecânica <span class="req">*</span></label>
           <select class="select" name="supplier_id" id="srv-supplier" required ${editing ? 'disabled' : ''}>${supOptions}</select>
@@ -329,7 +361,13 @@ function openSrvModal(id) {
       supSel.innerHTML = '<option value="">Nenhuma mecânica cadastrada nesta secretaria</option>';
     }
   }
-  vehSel.addEventListener('change', () => rebuildSupplierOptions());
+  // Motorista (opcional): ativos da secretaria do veículo e os sem secretaria
+  const driverField = mountDriverField(m, {
+    drivers: _drivers,
+    getVehicle: () => _vehicles.find(x => x.id === vehSel.value),
+    selectedId: a?.driver_id || '',
+  });
+  vehSel.addEventListener('change', () => { rebuildSupplierOptions(); driverField.refresh(); });
   rebuildSupplierOptions(a?.supplier_id || '');
 
   m.querySelector('[data-cancel]').addEventListener('click', closeModal);
@@ -380,11 +418,19 @@ async function saveSrv(id) {
         p_notes: v.notes || null,
       });
       if (error) throw error;
+      // ... e o motorista, quando mudou
+      const before = _items.find(x => x.id === id)?.driver_id || '';
+      if (_hasDrivers && (v.driver_id || '') !== before) {
+        const r = await supabase.rpc('set_service_authorization_driver', { p_auth_id: id, p_driver_id: v.driver_id || null });
+        if (r.error) throw r.error;
+      }
       toast('Autorização atualizada.', 'success');
       closeModal();
       await loadAll(); renderTable();
     } else {
-      const { data, error } = await supabase.rpc('emit_service_authorization', {
+      // Com motorista, a função nova emite e grava o motorista juntos;
+      // sem motorista, a emissão é a de sempre.
+      const args = {
         p_date: v.date,
         p_vehicle_id: v.vehicle_id,
         p_supplier_id: v.supplier_id,
@@ -393,7 +439,10 @@ async function saveSrv(id) {
         p_estimated_value: Number(v.estimated_value),
         p_responsible_name: v.responsible_name,
         p_notes: v.notes || null,
-      });
+      };
+      const { data, error } = (_hasDrivers && v.driver_id)
+        ? await supabase.rpc('emit_service_authorization_with_driver', { ...args, p_driver_id: v.driver_id })
+        : await supabase.rpc('emit_service_authorization', args);
       if (error) throw error;
       toast('Autorização emitida.', 'success');
       await loadAll(); renderTable();
@@ -434,6 +483,7 @@ async function openQRModal(id) {
         <div><strong>Mecânica:</strong> ${esc(sup?.trade_name || sup?.legal_name || a.supplier_trade_name_snapshot)}</div>
         ${sup?.cnpj ? `<div><strong>CNPJ:</strong> ${esc(sup.cnpj)}</div>` : ''}
         <div><strong>Responsável:</strong> ${esc(a.responsible_name)}</div>
+        ${a.driver_name_snapshot ? `<div><strong>Motorista:</strong> ${esc(a.driver_name_snapshot)}</div>` : ''}
         ${a.notes ? `<div style="margin-top:var(--s-2);padding-top:var(--s-2);border-top:1px dashed var(--border)"><strong>Obs:</strong> ${esc(a.notes)}</div>` : ''}
       </div>
     </div>
@@ -646,6 +696,7 @@ async function printSrvA4(id) {
         <tr><td class="lbl">Valor estimado</td><td class="big" style="color:#16A34A">${fmtMoney(a.estimated_value)}</td></tr>
         <tr><td class="lbl">Mecânica</td><td>${esc(a.supplier_trade_name_snapshot)}${sup?.cnpj ? '<br><small>CNPJ ' + esc(sup.cnpj) + '</small>' : ''}</td></tr>
         <tr><td class="lbl">Responsável</td><td>${esc(a.responsible_name)}</td></tr>
+        ${a.driver_name_snapshot ? `<tr><td class="lbl">Motorista</td><td>${esc(a.driver_name_snapshot)}</td></tr>` : ''}
       </table>
       <div class="service-box">
         <div class="lbl">📋 Serviço a ser realizado</div>
@@ -686,6 +737,7 @@ async function printSrvThermal(id) {
     `Valor: ${fmtMoney(a.estimated_value)}`,
     `Mecânica: ${a.supplier_trade_name_snapshot}`,
     `Resp: ${a.responsible_name}`,
+    ...(a.driver_name_snapshot ? [`Mot: ${a.driver_name_snapshot}`] : []),
   ].join('\n');
   const qrDataUrl = await QRCode.toDataURL(compactPayload, { width: 400, margin: 2, errorCorrectionLevel: 'L' });
   const orgao = entity?.organ_name || 'Prefeitura Municipal';
@@ -710,6 +762,7 @@ async function printSrvThermal(id) {
     <div class="row"><span class="lbl">Mecânica:</span><span class="val-md">${esc(a.supplier_trade_name_snapshot)}</span></div>
     <div class="sep"></div>
     <div class="row"><span class="lbl">Responsável:</span><span class="val-md">${esc(a.responsible_name)}</span></div>
+    ${a.driver_name_snapshot ? `<div class="row"><span class="lbl">Motorista:</span><span class="val-md">${esc(a.driver_name_snapshot)}</span></div>` : ''}
     <div class="rubrica">Rubrica do responsável</div>
     ${a.notes ? `<div class="sep"></div><div><span class="lbl">Obs:</span><span class="val-md">${esc(a.notes)}</span></div>` : ''}
     <div class="sep"></div>
