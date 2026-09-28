@@ -797,6 +797,8 @@ input[type="month"]::-webkit-calendar-picker-indicator {
   gap: var(--s-4);
   margin-bottom: var(--s-4);
 }
+/* O espaço entre os cartões é o gap da grade, não a margem entre cartões vizinhos */
+.dash-grid-2 > .card { margin-top: 0; }
 @media (max-width: 900px) { .dash-grid-2 { grid-template-columns: 1fr; } }
 
 .dash-chart-card { padding: var(--s-4) var(--s-5); }
