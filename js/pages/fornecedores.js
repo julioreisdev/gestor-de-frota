@@ -1,6 +1,6 @@
 import { pageRoot, pageHeader } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, toast, openModal, closeModal, confirmDialog, formValues, fmtMoney } from '../ui.js';
+import { esc, toast, openModal, closeModal, confirmDialog, formValues, fmtMoney, isMissingColumn } from '../ui.js';
 import { icons } from '../icons.js';
 import { printList, buildFiltersLabel } from '../print.js';
 import { exportXLSX, timestampFilename } from '../export.js';
@@ -145,19 +145,28 @@ export async function renderFornecedores() {
   renderTable();
 }
 
-async function loadAll() {
-  const [s, d, m, f, fs] = await Promise.all([
-    supabase.from('supplier').select(`
+// false quando o banco ainda não recebeu o apply.sql do faturamento
+let _hasBillingCols = true;
+const SUPPLIER_COLS = `
       id, kind, legal_name, trade_name, cnpj, responsible_name, phone,
       address, city, ibge_code, department_id, contract_number,
       department:department_id(acronym, name),
-      fuels:supplier_fuel(id, fuel_type_code, fuel_subtype_id, unit_price, contract_amount, current_balance)
-    `).order('legal_name'),
+      fuels:supplier_fuel(id, fuel_type_code, fuel_subtype_id, unit_price, contract_amount, current_balance)`;
+const SUPPLIER_BILLING_COLS = ', price_type, fiscal_name, fiscal_registration, fiscal_ordinance';
+
+async function loadAll() {
+  let [s, d, m, f, fs] = await Promise.all([
+    supabase.from('supplier').select(SUPPLIER_COLS + SUPPLIER_BILLING_COLS).order('legal_name'),
     supabase.from('department').select('id, acronym, name').order('acronym'),
     supabase.from('ibge_municipality').select('code, name').order('name'),
     supabase.from('fuel_type').select('code, description').order('code'),
     supabase.from('fuel_subtype').select('id, fuel_type_code, description, active').eq('active', true).order('description'),
   ]);
+  _hasBillingCols = true;
+  if (s.error && isMissingColumn(s.error)) {
+    _hasBillingCols = false;
+    s = await supabase.from('supplier').select(SUPPLIER_COLS).order('legal_name');
+  }
   if (s.error) { toast('Falha ao carregar fornecedores: ' + s.error.message, 'error'); _items = []; }
   else _items = s.data || [];
   _depts = d.data || [];
@@ -504,6 +513,30 @@ function openForModal(id) {
           <input class="input" name="contract_number" maxlength="30" value="${esc(s?.contract_number || '')}"
                  placeholder="ex: 012/2025">
         </div>
+        ${_hasBillingCols ? `
+        <div class="field col-full" data-billing-field style="display:${kind === 'mecanica' ? 'none' : ''}">
+          <label class="field-label">Tipo de preço do contrato</label>
+          <select class="select" name="price_type">
+            <option value="fixo" ${(s?.price_type || 'fixo') === 'fixo' ? 'selected' : ''}>Preço fixo por litro</option>
+            <option value="desconto_bomba" ${s?.price_type === 'desconto_bomba' ? 'selected' : ''}>Desconto sobre o preço da bomba</option>
+          </select>
+          <span class="field-help">Preço fixo: o Termo de Recebimento já vem com o preço do contrato. Desconto sobre a bomba: o fiscal informa o preço da nota ao gerar o termo.</span>
+        </div>
+        <div class="field col-full" data-billing-field style="display:${kind === 'mecanica' ? 'none' : ''}">
+          <label class="field-label">Fiscal do contrato</label>
+          <input class="input" name="fiscal_name" maxlength="120" value="${esc(s?.fiscal_name || '')}"
+                 placeholder="Nome completo do fiscal">
+          <span class="field-help">Assina o Termo de Recebimento.</span>
+        </div>
+        <div class="field" data-billing-field style="display:${kind === 'mecanica' ? 'none' : ''}">
+          <label class="field-label">Matrícula do fiscal</label>
+          <input class="input" name="fiscal_registration" maxlength="30" value="${esc(s?.fiscal_registration || '')}">
+        </div>
+        <div class="field" data-billing-field style="display:${kind === 'mecanica' ? 'none' : ''}">
+          <label class="field-label">Portaria de designação</label>
+          <input class="input" name="fiscal_ordinance" maxlength="60" value="${esc(s?.fiscal_ordinance || '')}"
+                 placeholder="ex: Portaria nº 015/2026">
+        </div>` : ''}
       </div>
 
       <div id="fuels-block" style="display:${kind === 'mecanica' ? 'none' : ''}">
@@ -546,6 +579,8 @@ function openForModal(id) {
       const k = btn.dataset.kind;
       m.querySelector('#for-kind-input').value = k;
       m.querySelector('#fuels-block').style.display = (k === 'mecanica') ? 'none' : '';
+      // Faturamento é só de combustível: mecânica não tem tipo de preço nem fiscal
+      m.querySelectorAll('[data-billing-field]').forEach(el => { el.style.display = (k === 'mecanica') ? 'none' : ''; });
     });
   });
 
@@ -713,6 +748,12 @@ async function saveFor(id) {
     department_id: v.department_id || null,
     contract_number: (v.contract_number || '').trim() || null,
   };
+  if (_hasBillingCols) {
+    payload.price_type = v.price_type === 'desconto_bomba' ? 'desconto_bomba' : 'fixo';
+    payload.fiscal_name = (v.fiscal_name || '').trim() || null;
+    payload.fiscal_registration = (v.fiscal_registration || '').trim() || null;
+    payload.fiscal_ordinance = (v.fiscal_ordinance || '').trim() || null;
+  }
 
   const btn = document.getElementById('for-save-btn');
   btn.disabled = true;
@@ -778,7 +819,7 @@ function friendlyError(err) {
   // Cada constraint dá mensagem específica — não agrupar tudo em "cnpj OU combustível"
   if (err?.code === '23505' || /duplicate key|already exists|unique/i.test(msg)) {
     if (/ux_supplier_cnpj_dept|supplier_cnpj_key/i.test(msg)) {
-      return 'Esse CNPJ já está cadastrado para essa secretaria. Selecione outra secretaria ou edite o cadastro existente.';
+      return 'Esse CNPJ já está cadastrado para essa secretaria com esse número de contrato. Informe outro nº de contrato, outra secretaria, ou edite o cadastro existente.';
     }
     if (/ux_supplier_fuel_unique|supplier_fuel/i.test(msg)) {
       return 'Combustível/subtipo duplicado neste fornecedor. Remova a linha repetida.';

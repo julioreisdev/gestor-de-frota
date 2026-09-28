@@ -14,6 +14,7 @@ import { renderManutencoes } from './pages/manutencoes.js';
 import { renderRelatorios } from './pages/relatorios.js';
 import { renderExportacao } from './pages/exportacao.js';
 import { renderDashboard } from './pages/dashboard.js';
+import { renderFaturamento } from './pages/faturamento.js';
 import { register, navigate, setOnChange, start, currentPath } from './router.js';
 import { toast } from './ui.js';
 import { registerSW } from './pwa.js';
@@ -29,6 +30,7 @@ function registerRoutes() {
   register('/autorizacoes',   renderAutorizacoes);
   register('/abastecimentos', renderAbastecimentos);
   register('/manutencoes',    renderManutencoes);
+  register('/faturamento',    renderFaturamento);
   register('/relatorios',     renderRelatorios);
   register('/exportacao',     renderExportacao);
   register('*',               () => renderPlaceholder('Página não encontrada'));
@@ -82,6 +84,9 @@ async function boot() {
     if (document.visibilityState !== 'visible') return;
     if (!getSession()) return;
     if (document.querySelector('.modal-backdrop')) return;
+    // Edição em linha não salva (ex.: Configuração do faturamento): não redesenha,
+    // senão o usuário perde o que digitou ao trocar de aba pra copiar um dado.
+    if (document.querySelector('[data-unsaved]')) return;
     if (Date.now() - _lastHidden < 5000) return;
     start();
   });

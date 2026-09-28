@@ -1,3 +1,8 @@
 instances.json
 .DS_Store
 .vscode/
+
+# Material do cliente e planejamento interno: não publicar (GitHub Pages serve tudo que está no repo)
+gerir-frota-of-termo/
+PLANEJAMENTO_*.md
+PLANEJAMENTO_*.pdf

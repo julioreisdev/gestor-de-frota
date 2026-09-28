@@ -23,6 +23,38 @@ export function formatPlate(s) {
   return c; // Mercosul (ABC1D23) ou inválido — devolve cru
 }
 
+// CNPJ: guardado só com dígitos; exibido com máscara.
+export const onlyDigits = (s) => String(s ?? '').replace(/\D/g, '');
+export function fmtCNPJ(c) {
+  const d = onlyDigits(c);
+  if (d.length !== 14) return d;
+  return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8,12)}-${d.slice(12)}`;
+}
+/** Máscara progressiva para digitação (aceita colar com ou sem pontuação). */
+export function maskCNPJ(v) {
+  const d = onlyDigits(v).slice(0, 14);
+  return d
+    .replace(/^(\d{2})(\d)/, '$1.$2')
+    .replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/\.(\d{3})(\d)/, '.$1/$2')
+    .replace(/(\d{4})(\d)/, '$1-$2');
+}
+/** Confere os dois dígitos verificadores. */
+export function isValidCNPJ(c) {
+  const d = onlyDigits(c);
+  if (d.length !== 14 || /^(\d)\1{13}$/.test(d)) return false;
+  const dv = (len) => {
+    let sum = 0, w = len - 7;
+    for (let i = 0; i < len; i++) { sum += Number(d.charAt(i)) * w; w = w === 2 ? 9 : w - 1; }
+    const r = sum % 11;
+    return r < 2 ? 0 : 11 - r;
+  };
+  return dv(12) === Number(d.charAt(12)) && dv(13) === Number(d.charAt(13));
+}
+/** Erro de coluna inexistente: o código novo subiu antes do apply.sql. */
+export const isMissingColumn = (err) =>
+  err?.code === '42703' || err?.code === 'PGRST204' || /column .* does not exist|could not find the .* column/i.test(err?.message || '');
+
 /** Label rico para options/dropdowns de fornecedor.
  *  Depois que passamos a permitir mesmo CNPJ em secretarias diferentes,
  *  a listagem ficava com nomes idênticos ("POSTO B & B LTDA" 4×) sem forma

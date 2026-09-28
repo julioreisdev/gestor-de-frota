@@ -1,12 +1,14 @@
 import { pageRoot, pageHeader } from '../shell.js';
 import { supabase } from '../supabase.js';
-import { esc, toast, openModal, closeModal, confirmDialog, formValues } from '../ui.js';
+import { esc, toast, openModal, closeModal, confirmDialog, formValues, fmtCNPJ, maskCNPJ, isValidCNPJ, onlyDigits, isMissingColumn } from '../ui.js';
 import { icons } from '../icons.js';
 import { isAdmin } from '../auth.js';
 
 let _items = [];
 let _users = [];  // usuários com role='usuario' (candidatos a responsáveis)
 let _searchTerm = '';
+// false quando o banco ainda não recebeu o apply.sql do faturamento
+let _hasBillingCols = true;
 
 export async function renderSecretarias() {
   pageRoot().innerHTML = `
@@ -60,14 +62,18 @@ export async function renderSecretarias() {
 }
 
 async function loadAll() {
-  const [d, u] = await Promise.all([
-    supabase.from('department')
-      .select('id, name, acronym, cost_center, responsible_name, phone, email, created_at, responsible_user_id')
-      .order('acronym'),
+  const BASE = 'id, name, acronym, cost_center, responsible_name, phone, email, created_at, responsible_user_id';
+  let [d, u] = await Promise.all([
+    supabase.from('department').select(BASE + ', cnpj, responsible_role').order('acronym'),
     // Lista de candidatos a responsável (usuários ativos com role 'usuario' ou 'admin').
     // Usa RPC admin_list_users pois só admin acessa essa página.
     supabase.rpc('admin_list_users'),
   ]);
+  _hasBillingCols = true;
+  if (d.error && isMissingColumn(d.error)) {
+    _hasBillingCols = false;
+    d = await supabase.from('department').select(BASE).order('acronym');
+  }
   if (d.error) { toast('Falha ao carregar secretarias: ' + d.error.message, 'error'); _items = []; }
   else _items = d.data || [];
   if (u.error) { _users = []; }
@@ -80,6 +86,7 @@ function matchesSearch(d, t) {
   return (d.acronym || '').toLowerCase().includes(term)
       || (d.name || '').toLowerCase().includes(term)
       || (d.responsible_name || '').toLowerCase().includes(term)
+      || onlyDigits(d.cnpj).includes(onlyDigits(term) || '\u0000')
       || (d.cost_center || '').toLowerCase().includes(term)
       || (d.email || '').toLowerCase().includes(term);
 }
@@ -154,7 +161,9 @@ function deptRow(d) {
       <td data-label="Sigla"><span class="badge">${esc(d.acronym)}</span></td>
       <td data-label="Nome">${esc(d.name)}</td>
       <td data-label="Centro de custo" style="color:var(--text-soft)">${esc(d.cost_center || '—')}</td>
-      <td data-label="Responsável">${esc(d.responsible_name || '—')}</td>
+      <td data-label="Responsável">${d.responsible_name
+        ? `<div class="cell-stack"><span>${esc(d.responsible_name)}</span>${d.responsible_role ? `<span style="font-size:11.5px;color:var(--text-muted)">${esc(d.responsible_role)}</span>` : ''}</div>`
+        : '—'}</td>
       <td data-label="Contato" style="font-size:12.5px;color:var(--text-soft)">${contato}</td>
       <td class="actions-col">
         <div class="actions-row">
@@ -190,6 +199,29 @@ function openDeptModal(id) {
                  value="${esc(d?.name || '')}"
                  placeholder="ex: Secretaria Municipal de Saúde">
         </div>
+        ${_hasBillingCols ? `
+        <div class="field">
+          <label class="field-label">CNPJ</label>
+          <input class="input" name="cnpj" inputmode="numeric" maxlength="18"
+                 value="${esc(fmtCNPJ(d?.cnpj))}" placeholder="00.000.000/0000-00" id="dept-cnpj">
+          <span class="field-help">Sai na Ordem de Fornecimento e no Termo de Recebimento.</span>
+        </div>
+        <div class="field">
+          <label class="field-label">Telefone</label>
+          <input class="input" name="phone" type="tel" value="${esc(d?.phone || '')}"
+                 placeholder="(89) 3456-7890">
+        </div>
+        <div class="field">
+          <label class="field-label">Responsável</label>
+          <input class="input" name="responsible_name" value="${esc(d?.responsible_name || '')}"
+                 placeholder="Nome do gestor">
+        </div>
+        <div class="field">
+          <label class="field-label">Cargo do responsável</label>
+          <input class="input" name="responsible_role" maxlength="120"
+                 value="${esc(d?.responsible_role || '')}"
+                 placeholder="ex: Secretário(a) Municipal de Saúde">
+        </div>` : `
         <div class="field">
           <label class="field-label">Responsável</label>
           <input class="input" name="responsible_name" value="${esc(d?.responsible_name || '')}"
@@ -199,7 +231,7 @@ function openDeptModal(id) {
           <label class="field-label">Telefone</label>
           <input class="input" name="phone" type="tel" value="${esc(d?.phone || '')}"
                  placeholder="(89) 3456-7890">
-        </div>
+        </div>`}
         <div class="field col-full">
           <label class="field-label">E-mail</label>
           <input class="input" name="email" type="email" value="${esc(d?.email || '')}"
@@ -224,6 +256,8 @@ function openDeptModal(id) {
     title: editing ? 'Editar secretaria' : 'Nova secretaria',
     body, footer, size: 'lg',
   });
+  const cnpjIn = m.querySelector('#dept-cnpj');
+  if (cnpjIn) cnpjIn.addEventListener('input', () => { cnpjIn.value = maskCNPJ(cnpjIn.value); });
   m.querySelector('[data-cancel]').addEventListener('click', closeModal);
   m.querySelector('#dept-save-btn').addEventListener('click', () => saveDept(editing ? id : null));
 }
@@ -240,6 +274,12 @@ async function saveDept(id) {
     phone: (v.phone || '').trim() || null,
     email: (v.email || '').trim() || null,
   };
+  if (_hasBillingCols) {
+    const cnpj = onlyDigits(v.cnpj);
+    if (cnpj && !isValidCNPJ(cnpj)) { toast('CNPJ inválido. Confira os dígitos.', 'error'); return; }
+    payload.cnpj = cnpj || null;
+    payload.responsible_role = (v.responsible_role || '').trim() || null;
+  }
 
   const btn = document.getElementById('dept-save-btn');
   btn.disabled = true;

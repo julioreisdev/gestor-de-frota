@@ -20,6 +20,7 @@ export const NAV = [
   { path: '/autorizacoes',   label: 'Autorizações',     icon: 'clipboard',  roles: ['admin','usuario','fornecedor'] },
   { path: '/abastecimentos', label: 'Abastecimentos',   icon: 'droplet',    roles: ['admin','usuario'] },
   { path: '/manutencoes',    label: 'Manutenções',      icon: 'wrench',     roles: ['admin','usuario'] },
+  { path: '/faturamento',    label: 'Faturamento',      icon: 'receipt',    roles: ['admin'] },
   { group: 'Análise' },
   { path: '/relatorios',     label: 'Relatórios',       icon: 'barChart',   roles: ['admin','usuario'] },
   { path: '/exportacao',     label: 'Exportação TCE',   icon: 'download',   roles: ['admin','usuario'] },
@@ -36,6 +37,7 @@ const BREADCRUMB = {
   '/autorizacoes':   [{ label: 'Operação' }, { label: 'Autorizações' }],
   '/abastecimentos': [{ label: 'Operação' }, { label: 'Abastecimentos' }],
   '/manutencoes':    [{ label: 'Operação' }, { label: 'Manutenções' }],
+  '/faturamento':    [{ label: 'Operação' }, { label: 'Faturamento' }],
   '/relatorios':     [{ label: 'Análise' }, { label: 'Relatórios' }],
   '/exportacao':     [{ label: 'Análise' }, { label: 'Exportação TCE' }],
 };
