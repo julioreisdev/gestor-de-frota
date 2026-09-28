@@ -29,6 +29,7 @@ export const icons = {
   qrcode:       wrap('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><line x1="14" y1="14" x2="14" y2="17"/><line x1="14" y1="20" x2="14" y2="21"/><line x1="17" y1="14" x2="17" y2="14"/><line x1="20" y1="14" x2="20" y2="17"/><line x1="17" y1="17" x2="20" y2="17"/><line x1="17" y1="20" x2="20" y2="20"/><line x1="20" y1="20" x2="20" y2="21"/>'),
   fileCheck:    wrap('<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><path d="m9 15 2 2 4-4"/>'),
   history:      wrap('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>'),
+  idCard:       wrap('<rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="11" r="2"/><path d="M5 16c.6-1.2 1.7-2 3-2s2.4.8 3 2"/><line x1="14.5" y1="10" x2="19" y2="10"/><line x1="14.5" y1="14" x2="19" y2="14"/>'),
   ban:          wrap('<circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>'),
 
   // UI

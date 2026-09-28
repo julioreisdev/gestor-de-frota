@@ -3208,6 +3208,216 @@ revoke all on function receipt_term_fuelings(uuid) from public;
 grant execute on function receipt_term_fuelings(uuid) to authenticated;
 
 -- =============================================================================
+-- 18) MOTORISTAS — cadastro
+--   Obrigatórios: nome e CPF. Todo o resto é opcional.
+--   Motorista sem secretaria atende qualquer uma.
+--   Admin e usuário cadastram e editam; só admin exclui. Usuário vinculado a
+--   uma secretaria vê e edita os da sua e os sem secretaria. Posto não acessa.
+-- Idempotente.
+-- =============================================================================
+
+-- Confere os dois dígitos verificadores do CPF (só dígitos, 11 posições).
+create or replace function is_valid_cpf(p_cpf text) returns boolean
+language plpgsql immutable as $$
+declare s integer; r integer;
+begin
+  if p_cpf is null or p_cpf !~ '^[0-9]{11}$' or p_cpf ~ '^([0-9])\1{10}$' then return false; end if;
+  s := 0;
+  for i in 1..9 loop s := s + substr(p_cpf, i, 1)::integer * (11 - i); end loop;
+  r := (s * 10) % 11; if r = 10 then r := 0; end if;
+  if r <> substr(p_cpf, 10, 1)::integer then return false; end if;
+  s := 0;
+  for i in 1..10 loop s := s + substr(p_cpf, i, 1)::integer * (12 - i); end loop;
+  r := (s * 10) % 11; if r = 10 then r := 0; end if;
+  return r = substr(p_cpf, 11, 1)::integer;
+end;
+$$;
+
+create table if not exists driver (
+  id uuid primary key default gen_random_uuid(),
+  full_name text not null,
+  cpf char(11) not null,
+  rg text,
+  rg_issuer text,
+  birth_date date,
+  blood_type text,
+  registration text,                                        -- matrícula
+  job_title text,
+  employment_type text,
+  department_id uuid references department(id),
+  admission_date date,
+  cnh_number char(11),
+  cnh_category text,
+  cnh_expiry date,
+  cnh_first_issue date,
+  cnh_state char(2),
+  cnh_paid_activity boolean,                                -- EAR
+  toxicology_expiry date,
+  phone text,
+  phone2 text,
+  email text,
+  address_street text,
+  address_number text,
+  address_district text,
+  address_city text,
+  address_zip char(8),
+  emergency_contact_name text,
+  emergency_contact_phone text,
+  active boolean not null default true,
+  notes text,
+  created_by uuid references app_user(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint ux_driver_cpf unique (cpf),
+  constraint chk_driver_name check (char_length(btrim(full_name)) between 3 and 120),
+  constraint chk_driver_cpf check (is_valid_cpf(cpf)),
+  constraint chk_driver_blood check (blood_type is null or blood_type in ('A+','A-','B+','B-','AB+','AB-','O+','O-')),
+  constraint chk_driver_employment check (employment_type is null or employment_type in ('efetivo','comissionado','contratado','terceirizado')),
+  constraint chk_driver_cnh_number check (cnh_number is null or cnh_number ~ '^[0-9]{11}$'),
+  constraint chk_driver_cnh_category check (cnh_category is null or cnh_category in ('A','B','C','D','E','AB','AC','AD','AE')),
+  constraint chk_driver_cnh_state check (cnh_state is null or cnh_state ~ '^[A-Z]{2}$'),
+  constraint chk_driver_zip check (address_zip is null or address_zip ~ '^[0-9]{8}$'),
+  constraint chk_driver_cnh_dates check (cnh_first_issue is null or cnh_expiry is null or cnh_expiry >= cnh_first_issue)
+);
+drop trigger if exists trg_driver_set_updated_at on driver;
+create trigger trg_driver_set_updated_at before update on driver
+  for each row execute function set_updated_at();
+create index if not exists ix_driver_department on driver (department_id);
+create index if not exists ix_driver_cnh_expiry on driver (cnh_expiry) where active;
+
+create table if not exists driver_course (
+  driver_id uuid not null references driver(id) on delete cascade,
+  kind text not null check (kind in ('escolar','coletivo','emergencia','perigosos','indivisivel')),
+  expiry date,
+  primary key (driver_id, kind)
+);
+
+grant select, insert, update, delete on driver, driver_course to authenticated;
+
+alter table driver        enable row level security;
+alter table driver_course enable row level security;
+
+drop policy if exists p_driver_read on driver;
+create policy p_driver_read on driver for select
+  using (
+    current_user_role() = 'admin'
+    or (current_user_role() = 'usuario'
+        and (current_user_department_id() is null
+             or department_id is null
+             or department_id = current_user_department_id()))
+  );
+drop policy if exists p_driver_insert on driver;
+create policy p_driver_insert on driver for insert
+  with check (
+    current_user_role() = 'admin'
+    or (current_user_role() = 'usuario'
+        and (current_user_department_id() is null
+             or department_id is null
+             or department_id = current_user_department_id()))
+  );
+drop policy if exists p_driver_update on driver;
+create policy p_driver_update on driver for update
+  using (
+    current_user_role() = 'admin'
+    or (current_user_role() = 'usuario'
+        and (current_user_department_id() is null
+             or department_id is null
+             or department_id = current_user_department_id()))
+  )
+  with check (
+    current_user_role() = 'admin'
+    or (current_user_role() = 'usuario'
+        and (current_user_department_id() is null
+             or department_id is null
+             or department_id = current_user_department_id()))
+  );
+drop policy if exists p_driver_delete on driver;
+create policy p_driver_delete on driver for delete
+  using (current_user_role() = 'admin');
+
+-- Cursos: acompanham o motorista (quem enxerga o motorista mexe nos cursos dele)
+drop policy if exists p_driver_course_all on driver_course;
+create policy p_driver_course_all on driver_course for all
+  using (current_user_role() in ('admin','usuario')
+         and exists (select 1 from driver d where d.id = driver_course.driver_id))
+  with check (current_user_role() in ('admin','usuario')
+         and exists (select 1 from driver d where d.id = driver_course.driver_id));
+
+-- Salva o motorista e os cursos de uma vez (tudo ou nada).
+-- Roda com as permissões de quem chama: as políticas acima valem aqui.
+-- p_driver: campos do cadastro; p_courses: [{"kind":"escolar","expiry":"2027-01-31"}, ...]
+create or replace function save_driver(p_id uuid, p_driver jsonb, p_courses jsonb default '[]'::jsonb)
+returns uuid
+language plpgsql security invoker set search_path = public, auth as $$
+declare
+  v_id uuid := p_id;
+  r driver%rowtype;
+  t text := '';
+begin
+  -- texto vazio vira nulo; espaços nas pontas saem
+  select jsonb_object_agg(key, case when jsonb_typeof(value) = 'string' and btrim(value #>> '{}') = '' then 'null'::jsonb
+                                    when jsonb_typeof(value) = 'string' then to_jsonb(btrim(value #>> '{}'))
+                                    else value end)
+    into p_driver
+    from jsonb_each(coalesce(p_driver, '{}'::jsonb));
+  r := jsonb_populate_record(null::driver, coalesce(p_driver, '{}'::jsonb));
+
+  if r.full_name is null or char_length(r.full_name) < 3 then raise exception 'Informe o nome completo do motorista.'; end if;
+  if r.cpf is null or not is_valid_cpf(r.cpf) then raise exception 'CPF inválido.'; end if;
+  if r.birth_date is not null and r.birth_date > current_date then raise exception 'A data de nascimento não pode ser futura.'; end if;
+  if r.cnh_first_issue is not null and r.cnh_first_issue > current_date then raise exception 'A data da primeira habilitação não pode ser futura.'; end if;
+  if r.admission_date is not null and r.admission_date > current_date then raise exception 'A data de admissão não pode ser futura.'; end if;
+  if exists (select 1 from driver d where d.cpf = r.cpf and d.id is distinct from p_id) then
+    raise exception 'Já existe um motorista com este CPF.';
+  end if;
+
+  if p_id is null then
+    insert into driver (
+      full_name, cpf, rg, rg_issuer, birth_date, blood_type,
+      registration, job_title, employment_type, department_id, admission_date,
+      cnh_number, cnh_category, cnh_expiry, cnh_first_issue, cnh_state, cnh_paid_activity, toxicology_expiry,
+      phone, phone2, email,
+      address_street, address_number, address_district, address_city, address_zip,
+      emergency_contact_name, emergency_contact_phone,
+      active, notes, created_by
+    ) values (
+      r.full_name, r.cpf, r.rg, r.rg_issuer, r.birth_date, r.blood_type,
+      r.registration, r.job_title, r.employment_type, r.department_id, r.admission_date,
+      r.cnh_number, r.cnh_category, r.cnh_expiry, r.cnh_first_issue, upper(r.cnh_state), r.cnh_paid_activity, r.toxicology_expiry,
+      r.phone, r.phone2, lower(r.email),
+      r.address_street, r.address_number, r.address_district, r.address_city, r.address_zip,
+      r.emergency_contact_name, r.emergency_contact_phone,
+      coalesce(r.active, true), r.notes, auth.uid()
+    ) returning id into v_id;
+  else
+    update driver set
+      full_name = r.full_name, cpf = r.cpf, rg = r.rg, rg_issuer = r.rg_issuer,
+      birth_date = r.birth_date, blood_type = r.blood_type,
+      registration = r.registration, job_title = r.job_title, employment_type = r.employment_type,
+      department_id = r.department_id, admission_date = r.admission_date,
+      cnh_number = r.cnh_number, cnh_category = r.cnh_category, cnh_expiry = r.cnh_expiry,
+      cnh_first_issue = r.cnh_first_issue, cnh_state = upper(r.cnh_state),
+      cnh_paid_activity = r.cnh_paid_activity, toxicology_expiry = r.toxicology_expiry,
+      phone = r.phone, phone2 = r.phone2, email = lower(r.email),
+      address_street = r.address_street, address_number = r.address_number,
+      address_district = r.address_district, address_city = r.address_city, address_zip = r.address_zip,
+      emergency_contact_name = r.emergency_contact_name, emergency_contact_phone = r.emergency_contact_phone,
+      active = coalesce(r.active, true), notes = r.notes
+    where id = p_id;
+    if not found then raise exception 'Motorista não encontrado ou sem permissão para alterar.'; end if;
+  end if;
+
+  delete from driver_course where driver_id = v_id;
+  insert into driver_course (driver_id, kind, expiry)
+    select v_id, c ->> 'kind', nullif(c ->> 'expiry', '')::date
+      from jsonb_array_elements(coalesce(p_courses, '[]'::jsonb)) c;
+  return v_id;
+end;
+$$;
+revoke all on function save_driver(uuid, jsonb, jsonb) from public;
+grant execute on function save_driver(uuid, jsonb, jsonb) to authenticated;
+
+-- =============================================================================
 -- 13) Força reload do schema cache do PostgREST
 -- =============================================================================
 notify pgrst, 'reload schema';

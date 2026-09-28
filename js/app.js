@@ -7,6 +7,7 @@ import { renderEntidade } from './pages/entidade.js';
 import { renderUsuarios } from './pages/usuarios.js';
 import { renderSecretarias } from './pages/secretarias.js';
 import { renderVeiculos } from './pages/veiculos.js';
+import { renderMotoristas } from './pages/motoristas.js';
 import { renderFornecedores } from './pages/fornecedores.js';
 import { renderAutorizacoes } from './pages/autorizacoes_index.js';
 import { renderAbastecimentos } from './pages/abastecimentos.js';
@@ -26,6 +27,7 @@ function registerRoutes() {
   register('/usuarios',       renderUsuarios);
   register('/secretarias',    renderSecretarias);
   register('/veiculos',       renderVeiculos);
+  register('/motoristas',     renderMotoristas);
   register('/fornecedores',   renderFornecedores);
   register('/autorizacoes',   renderAutorizacoes);
   register('/abastecimentos', renderAbastecimentos);

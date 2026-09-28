@@ -8,6 +8,7 @@ import { esc, fmtDate, fmtMoney, toast, formatPlate, supplierOptionLabel } from 
 import { icons } from '../icons.js';
 import { getProfile } from '../auth.js';
 import { queryFuelings } from '../billing.js';
+import { cnhStatus } from '../drivers.js';
 import Chart from 'https://esm.sh/chart.js@4.4.1/auto';
 
 // =============================================================================
@@ -24,6 +25,7 @@ let _fAuth = [];
 let _sAuth = [];
 let _users = [];
 let _unbilled = null;   // resumo do faturamento pendente
+let _drivers = [];      // motoristas ativos (validade da CNH)
 let _filter = { from: '', to: '' };
 let _charts = [];
 
@@ -101,6 +103,15 @@ async function loadAll() {
   _fAuth = fa.data || [];
   _sAuth = sa.data || [];
   _users = u.data || [];
+
+  // Motoristas: validade da CNH. Tolerante: banco sem a tabela, painel sem o aviso.
+  _drivers = [];
+  if (['admin', 'usuario'].includes(getProfile()?.role)) {
+    try {
+      const r = await supabase.from('driver').select('id, full_name, cnh_expiry').eq('active', true);
+      if (!r.error) _drivers = r.data || [];
+    } catch { /* sem aviso */ }
+  }
 
   // Faturamento: abastecimentos de meses encerrados ainda sem Ordem de Fornecimento.
   // Tolerante: se o banco ainda não tem a função, o painel segue sem o aviso.
@@ -340,6 +351,29 @@ function renderAlerts() {
       msg: `${litros} L em ${_unbilled.contracts} contrato(s), de meses já encerrados. O mais antigo é de ${fmtDate(_unbilled.oldest)}.`,
       link: '#/faturamento',
       attrs: 'data-billing-tab="new"',
+    });
+  }
+
+  // 6) CNH vencida ou vencendo em até 30 dias
+  const cnhExpired = _drivers.filter(d => cnhStatus(d) === 'expired');
+  const cnhExpiring = _drivers.filter(d => cnhStatus(d) === 'expiring');
+  const names = (l) => l.slice(0, 3).map(d => d.full_name).join(', ') + (l.length > 3 ? ` e mais ${l.length - 3}` : '');
+  if (cnhExpired.length) {
+    alerts.push({
+      level: 'danger',
+      icon: `<span style="width:20px;height:20px;display:inline-flex">${icons.idCard}</span>`,
+      title: `${cnhExpired.length} motorista(s) com CNH vencida`,
+      msg: names(cnhExpired) + '.',
+      link: '#/motoristas',
+    });
+  }
+  if (cnhExpiring.length) {
+    alerts.push({
+      level: 'warning',
+      icon: `<span style="width:20px;height:20px;display:inline-flex">${icons.idCard}</span>`,
+      title: `${cnhExpiring.length} motorista(s) com CNH vencendo em até 30 dias`,
+      msg: names(cnhExpiring) + '.',
+      link: '#/motoristas',
     });
   }
 

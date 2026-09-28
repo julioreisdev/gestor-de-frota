@@ -51,6 +51,50 @@ export function isValidCNPJ(c) {
   };
   return dv(12) === Number(d.charAt(12)) && dv(13) === Number(d.charAt(13));
 }
+// CPF: guardado só com dígitos; exibido com máscara.
+export function fmtCPF(c) {
+  const d = onlyDigits(c);
+  if (d.length !== 11) return d;
+  return `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6,9)}-${d.slice(9)}`;
+}
+/** CPF para listas e impressos (LGPD): ***.456.789-** */
+export function hideCPF(c) {
+  const d = onlyDigits(c);
+  if (d.length !== 11) return d ? '***' : '';
+  return `***.${d.slice(3,6)}.${d.slice(6,9)}-**`;
+}
+export function maskCPF(v) {
+  const d = onlyDigits(v).slice(0, 11);
+  return d
+    .replace(/^(\d{3})(\d)/, '$1.$2')
+    .replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/\.(\d{3})(\d{1,2})$/, '.$1-$2');
+}
+/** Confere os dois dígitos verificadores. */
+export function isValidCPF(c) {
+  const d = onlyDigits(c);
+  if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+  const dv = (len) => {
+    let sum = 0;
+    for (let i = 0; i < len; i++) sum += Number(d.charAt(i)) * (len + 1 - i);
+    const r = (sum * 10) % 11;
+    return r === 10 ? 0 : r;
+  };
+  return dv(9) === Number(d.charAt(9)) && dv(10) === Number(d.charAt(10));
+}
+/** Telefone: (89) 99999-0000 ou (89) 3333-0000, conforme o tamanho. */
+export function maskPhone(v) {
+  const d = onlyDigits(v).slice(0, 11);
+  if (d.length <= 2) return d.length ? '(' + d : '';
+  if (d.length <= 6) return `(${d.slice(0,2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
+  return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
+}
+export function maskCEP(v) {
+  const d = onlyDigits(v).slice(0, 8);
+  return d.length > 5 ? `${d.slice(0,5)}-${d.slice(5)}` : d;
+}
+
 /** Erro de coluna inexistente: o código novo subiu antes do apply.sql. */
 export const isMissingColumn = (err) =>
   err?.code === '42703' || err?.code === 'PGRST204' || /column .* does not exist|could not find the .* column/i.test(err?.message || '');
