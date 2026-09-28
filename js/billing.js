@@ -63,6 +63,31 @@ export function amountCents(liters, priceMilli) {
 }
 export const fmtCents = (c) => fmtAmount((c || 0) / 100);
 
+// ---- Valor faturado ----
+// Depois do Termo de Recebimento, o abastecimento vale o valor do termo (já com
+// o ajuste de centavos), e não litros × preço. Assim relatório e termo batem.
+
+/** Troca `total` pelo valor faturado nos abastecimentos que têm termo. */
+export function applyInvoicedTotals(rows) {
+  (rows || []).forEach(a => {
+    if (a.invoiced_total != null) { a.invoiced = true; a.total = Number(a.invoiced_total); }
+  });
+  return rows;
+}
+/** Consulta abastecimentos pedindo também os dados do faturamento.
+ *  build(colunas extras) devolve a consulta. Banco ainda sem as colunas: repete sem elas.
+ *  Devolve { data, error, hasBilling }. */
+export async function queryFuelings(build) {
+  let res = await build(', supply_order_id, invoiced_total');
+  let hasBilling = true;
+  if (res.error && (res.error.code === '42703' || /supply_order_id|invoiced_total/i.test(res.error.message || ''))) {
+    hasBilling = false;
+    res = await build('');
+  }
+  if (!res.error) applyInvoicedTotals(res.data);
+  return { ...res, hasBilling };
+}
+
 /** Tabela ou função do faturamento ainda não existe: o apply.sql não foi executado. */
 export function isBillingMissing(err) {
   const msg = err?.message || '';

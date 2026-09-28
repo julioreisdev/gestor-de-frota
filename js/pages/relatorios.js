@@ -5,6 +5,7 @@ import { icons } from '../icons.js';
 import Chart from 'https://esm.sh/chart.js@4.4.1/auto';
 import * as XLSX from 'https://esm.sh/xlsx@0.18.5';
 import { openPrintTab } from '../thermal.js';
+import { queryFuelings } from '../billing.js';
 
 // =============================================================================
 // ESTADO
@@ -24,7 +25,11 @@ let _filter = {
   dept: '', vehicle: '', supplier: '', fuel: '',
   origin: '', // código vehicle_origin (1 próprio, 2 cedido, 3 locado, 4 sublocado, 9 outras)
   type: '', // '' = ambos, 'fueling' = só abast., 'maintenance' = só manut.
+  billing: '', // '' = todos, 'with' = com OF, 'without' = sem OF, 'invoiced' = com Termo de Recebimento
 };
+// false quando o banco ainda não recebeu o apply.sql do faturamento
+let _hasBilling = true;
+const BILLING_LABEL = { with: 'Com Ordem de Fornecimento', without: 'Sem Ordem de Fornecimento', invoiced: 'Com Termo de Recebimento' };
 
 let _charts = [];
 
@@ -59,13 +64,14 @@ export async function renderRelatorios() {
 
 async function loadAll() {
   const [f, m, v, s, sf, d, ft, fs, o] = await Promise.all([
-    supabase.from('fueling').select(`
+    // total = valor faturado no Termo de Recebimento, quando houver
+    queryFuelings(extra => supabase.from('fueling').select(`
       id, vehicle_id, supplier_id, fuel_type_code, fuel_subtype_id,
       date, quantity, unit_price, total, km_initial, km_final,
       responsible_name, authorization_id,
       vehicle_plate_snapshot, department_acronym_snapshot, supplier_trade_name_snapshot,
-      authorization:authorization_id(number)
-    `).is('deleted_at', null),
+      authorization:authorization_id(number)${extra}
+    `).is('deleted_at', null)),
     supabase.from('maintenance').select(`
       id, vehicle_id, supplier_id, kind, status, open_date, close_date,
       total_value, responsible_name, authorization_id, description
@@ -87,6 +93,8 @@ async function loadAll() {
   ]);
   if (f.error) toast('Erro: ' + f.error.message, 'error');
   _fueling = f.data || [];
+  _hasBilling = f.hasBilling;
+  if (!_hasBilling) _filter.billing = '';
   _maintenance = m.data || [];
   _vehicles = v.data || [];
   _suppliers = s.data || [];
@@ -118,7 +126,7 @@ function renderFilterCard() {
           </button>
         </div>
       </div>
-      <div class="report-filter-grid">
+      <div class="report-filter-grid ${_hasBilling ? 'has-billing' : ''}">
         <div class="field"><label class="field-label">Data inicial</label><input class="input" type="date" id="rf-from" value="${_filter.from}"></div>
         <div class="field"><label class="field-label">Data final</label><input class="input" type="date" id="rf-to" value="${_filter.to}"></div>
         <div class="field">
@@ -134,6 +142,15 @@ function renderFilterCard() {
         <div class="field"><label class="field-label">Origem</label><select class="select" id="rf-origin"><option value="">Todas</option></select></div>
         <div class="field"><label class="field-label">Fornecedor</label><select class="select" id="rf-sup"><option value="">Todos</option></select></div>
         <div class="field"><label class="field-label">Combustível</label><select class="select" id="rf-fuel"><option value="">Todos</option></select></div>
+        ${_hasBilling ? `<div class="field rf-billing-field">
+          <label class="field-label">Faturamento</label>
+          <select class="select" id="rf-billing">
+            <option value="">Todos</option>
+            <option value="with">Com ordem</option>
+            <option value="without">Sem ordem</option>
+            <option value="invoiced">Com termo</option>
+          </select>
+        </div>` : ''}
         <div class="field"><label class="field-label" style="visibility:hidden">_</label><button class="btn btn-outline" id="rf-clear" style="width:100%">Limpar filtros</button></div>
       </div>
       <div class="report-filter-summary" id="rep-summary"></div>
@@ -151,16 +168,17 @@ function renderFilterCard() {
   if (_filter.fuel) document.getElementById('rf-fuel').value = _filter.fuel;
   if (_filter.origin) document.getElementById('rf-origin').value = _filter.origin;
   if (_filter.type) document.getElementById('rf-type').value = _filter.type;
+  if (_filter.billing && _hasBilling) document.getElementById('rf-billing').value = _filter.billing;
 
-  ['rf-from', 'rf-to', 'rf-dept', 'rf-veh', 'rf-sup', 'rf-fuel', 'rf-origin', 'rf-type'].forEach(id => {
-    document.getElementById(id).addEventListener('change', (e) => {
-      const map = { 'rf-from': 'from', 'rf-to': 'to', 'rf-dept': 'dept', 'rf-veh': 'vehicle', 'rf-sup': 'supplier', 'rf-fuel': 'fuel', 'rf-origin': 'origin', 'rf-type': 'type' };
+  ['rf-from', 'rf-to', 'rf-dept', 'rf-veh', 'rf-sup', 'rf-fuel', 'rf-origin', 'rf-type', 'rf-billing'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', (e) => {
+      const map = { 'rf-from': 'from', 'rf-to': 'to', 'rf-dept': 'dept', 'rf-veh': 'vehicle', 'rf-sup': 'supplier', 'rf-fuel': 'fuel', 'rf-origin': 'origin', 'rf-type': 'type', 'rf-billing': 'billing' };
       _filter[map[id]] = e.target.value;
       render();
     });
   });
   document.getElementById('rf-clear').addEventListener('click', () => {
-    _filter = { from: '', to: '', dept: '', vehicle: '', supplier: '', fuel: '', origin: '', type: '' };
+    _filter = { from: '', to: '', dept: '', vehicle: '', supplier: '', fuel: '', origin: '', type: '', billing: '' };
     renderFilterCard();
     render();
   });
@@ -183,6 +201,7 @@ function renderSummary(k) {
     if (s) parts.push('🏪 ' + supplierOptionLabel(s));
   }
   if (_filter.fuel)    parts.push('⛽ ' + (_fuels.find(f => f.code === Number(_filter.fuel))?.description || ''));
+  if (_filter.billing) parts.push('🧾 ' + BILLING_LABEL[_filter.billing]);
   el.innerHTML = `
     <div class="report-summary-filters">${parts.map(p => `<span class="filter-pill">${esc(p)}</span>`).join('') || '<span style="color:var(--text-muted);font-size:12px">Nenhum filtro adicional</span>'}</div>
     <div class="report-summary-stats">
@@ -217,6 +236,9 @@ function filteredFueling() {
     if (_filter.supplier && a.supplier_id !== _filter.supplier) return false;
     if (_filter.vehicle && a.vehicle_id !== _filter.vehicle) return false;
     if (_filter.fuel && String(a.fuel_type_code) !== String(_filter.fuel)) return false;
+    if (_filter.billing === 'with' && !a.supply_order_id) return false;
+    if (_filter.billing === 'without' && a.supply_order_id) return false;
+    if (_filter.billing === 'invoiced' && !a.invoiced) return false;
     if (_filter.dept || _filter.origin) {
       if (!vehicleMatchesFilter(_vehicles.find(x => x.id === a.vehicle_id))) return false;
     }

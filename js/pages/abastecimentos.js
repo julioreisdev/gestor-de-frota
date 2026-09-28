@@ -4,6 +4,7 @@ import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, fo
 import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 import { openPrintTab } from '../thermal.js';
+import { applyInvoicedTotals } from '../billing.js';
 
 let _items = [];
 let _vehicles = [];
@@ -124,7 +125,7 @@ const fuelingQuery = (cols) => supabase.from('fueling').select(cols)
 
 async function loadAll() {
   let [a, v, s, sf, ft, fs, d, ea] = await Promise.all([
-    fuelingQuery(FUELING_COLS + ', supply_order_id, supply_order:supply_order_id(number, status)'),
+    fuelingQuery(FUELING_COLS + ', supply_order_id, invoiced_total, supply_order:supply_order_id(number, status)'),
     supabase.from('vehicle').select(`
       id, plate, model, brand, current_km, tank_capacity, fuel_type_code, fuel_subtype_id,
       department_id, department:department_id(acronym, name)
@@ -149,7 +150,7 @@ async function loadAll() {
     a = await fuelingQuery(FUELING_COLS);
   }
   if (a.error) { toast('Falha ao carregar abastecimentos: ' + a.error.message, 'error'); _items = []; }
-  else _items = a.data || [];
+  else _items = applyInvoicedTotals(a.data || []);   // total = valor do termo, quando houver
   _vehicles = v.data || [];
   _suppliers = s.data || [];
   _supplierFuels = sf.data || [];
@@ -287,7 +288,7 @@ function absRow(a) {
       <td data-label="Combustível">${esc(fuelLabel(a.fuel_type_code, a.fuel_subtype_id))}</td>
       <td data-label="Qtd" style="white-space:nowrap">${Number(a.quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L</td>
       <td data-label="R$/L" style="white-space:nowrap">${Number(a.unit_price).toFixed(3)}</td>
-      <td data-label="Total" style="white-space:nowrap;color:var(--success);font-weight:500">${fmtMoney(a.total)}</td>
+      <td data-label="Total" style="white-space:nowrap;color:var(--success);font-weight:500"${a.invoiced ? ` title="Valor faturado no Termo de Recebimento ${esc(a.supply_order?.number || '')}"` : ''}>${fmtMoney(a.total)}</td>
       <td data-label="KM">${km}</td>
       <td data-label="Fornecedor">${supplierCellHTML(a.supplier_trade_name_snapshot, _suppliers.find(s => s.id === a.supplier_id))}</td>
       <td data-label="Origem">${locked

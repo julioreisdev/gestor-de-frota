@@ -7,6 +7,7 @@ import { supabase } from '../supabase.js';
 import { esc, fmtDate, fmtMoney, toast, formatPlate, supplierOptionLabel } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile } from '../auth.js';
+import { queryFuelings } from '../billing.js';
 import Chart from 'https://esm.sh/chart.js@4.4.1/auto';
 
 // =============================================================================
@@ -71,11 +72,12 @@ async function loadAll() {
     `).order('legal_name'),
     supabase.from('supplier_fuel').select('supplier_id, fuel_type_code, fuel_subtype_id, contract_amount, current_balance, unit_price'),
     supabase.from('fuel_type').select('code, description').order('code'),
-    supabase.from('fueling').select(`
+    // total = valor faturado no Termo de Recebimento, quando houver
+    queryFuelings(extra => supabase.from('fueling').select(`
       id, vehicle_id, supplier_id, fuel_type_code, date, quantity, unit_price, total,
       km_initial, km_final, responsible_name, authorization_id,
-      vehicle_plate_snapshot, supplier_trade_name_snapshot
-    `).is('deleted_at', null).order('date', { ascending: false }),
+      vehicle_plate_snapshot, supplier_trade_name_snapshot${extra}
+    `).is('deleted_at', null).order('date', { ascending: false })),
     supabase.from('maintenance').select(`
       id, vehicle_id, supplier_id, kind, status, open_date, close_date, total_value, description
     `).is('deleted_at', null).order('open_date', { ascending: false }),

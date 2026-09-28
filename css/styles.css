@@ -1219,6 +1219,8 @@ input[type="month"]::-webkit-calendar-picker-indicator {
 }
 .report-filter-grid .field { margin: 0; min-width: 0; }
 .report-filter-grid .field:last-child { grid-column: span 2; }
+/* Com o filtro de faturamento são 9 filtros: Limpar fecha a 2ª linha sozinho */
+.report-filter-grid.has-billing .field:last-child { grid-column: span 1; }
 .report-filter-grid .input,
 .report-filter-grid .select {
   width: 100%;
@@ -1228,10 +1230,13 @@ input[type="month"]::-webkit-calendar-picker-indicator {
 @media (max-width: 1200px) {
   /* 4 colunas: 8 filtros = 2 linhas cheias; Limpar na 3ª, 2 colunas */
   .report-filter-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .report-filter-grid.has-billing .field:last-child { grid-column: span 3; }
 }
 @media (max-width: 720px) {
   .report-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .report-filter-grid .field:last-child { grid-column: 1 / -1; }
+  .report-filter-grid .field:last-child,
+  .report-filter-grid.has-billing .field:last-child,
+  .report-filter-grid .rf-billing-field { grid-column: 1 / -1; }
   .report-filter-grid .field:last-child .field-label { display: none; }
 }
 
