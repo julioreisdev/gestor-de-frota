@@ -617,13 +617,19 @@ create trigger trg_fueling_revert_auth
 -- =============================================================================
 
 -- Gera o próximo número de autorização do dia
+-- Próximo = MAIOR sufixo do dia + 1 (não count+1: exclusões abririam buraco e
+-- o count geraria número já existente). Lock transacional por dia evita que
+-- duas emissões simultâneas peguem o mesmo número.
 create or replace function generate_authorization_number(p_date date) returns text
 language plpgsql as $$
 declare ds text; n int;
 begin
   ds := to_char(p_date,'YYYYMMDD');
-  select count(*)+1 into n from fueling_authorization where number like ds || '-%';
-  return ds || '-' || lpad(n::text,3,'0');
+  perform pg_advisory_xact_lock(hashtext('fueling_auth_' || ds));
+  select coalesce(max(split_part(number,'-',2)::int), 0) + 1 into n
+    from fueling_authorization
+   where number ~ ('^' || ds || '-[0-9]+$');
+  return ds || '-' || lpad(n::text, greatest(3, length(n::text)), '0');
 end;
 $$;
 
@@ -1658,8 +1664,11 @@ language plpgsql as $$
 declare ds text; n int;
 begin
   ds := to_char(p_date,'YYYYMMDD');
-  select count(*)+1 into n from service_authorization where number like ds || '-MAN-%';
-  return ds || '-MAN-' || lpad(n::text,3,'0');
+  perform pg_advisory_xact_lock(hashtext('service_auth_' || ds));
+  select coalesce(max(split_part(number,'-',3)::int), 0) + 1 into n
+    from service_authorization
+   where number ~ ('^' || ds || '-MAN-[0-9]+$');
+  return ds || '-MAN-' || lpad(n::text, greatest(3, length(n::text)), '0');
 end;
 $$;
 

@@ -90,5 +90,37 @@ drop index if exists supplier_cnpj_key;
 create unique index if not exists ux_supplier_cnpj_dept
   on supplier (cnpj, department_id);
 
+-- =============================================================================
+-- NUMERAÇÃO DE AUTORIZAÇÃO: max(sufixo)+1 em vez de count(*)+1.
+-- Bug: ao EXCLUIR uma autorização do dia, o count caía e o próximo número
+-- colidia com um existente ("duplicate key ... fueling_authorization_number_key").
+-- Lock transacional por dia evita corrida entre emissões simultâneas.
+-- =============================================================================
+create or replace function generate_authorization_number(p_date date) returns text
+language plpgsql as $$
+declare ds text; n int;
+begin
+  ds := to_char(p_date,'YYYYMMDD');
+  perform pg_advisory_xact_lock(hashtext('fueling_auth_' || ds));
+  select coalesce(max(split_part(number,'-',2)::int), 0) + 1 into n
+    from fueling_authorization
+   where number ~ ('^' || ds || '-[0-9]+$');
+  return ds || '-' || lpad(n::text, greatest(3, length(n::text)), '0');
+end;
+$$;
+
+create or replace function generate_service_authorization_number(p_date date) returns text
+language plpgsql as $$
+declare ds text; n int;
+begin
+  ds := to_char(p_date,'YYYYMMDD');
+  perform pg_advisory_xact_lock(hashtext('service_auth_' || ds));
+  select coalesce(max(split_part(number,'-',3)::int), 0) + 1 into n
+    from service_authorization
+   where number ~ ('^' || ds || '-MAN-[0-9]+$');
+  return ds || '-MAN-' || lpad(n::text, greatest(3, length(n::text)), '0');
+end;
+$$;
+
 -- Reload do schema cache do PostgREST
 notify pgrst, 'reload schema';
