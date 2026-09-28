@@ -55,9 +55,12 @@ function stateCard(icon, title, text) {
   </div></div>`;
 }
 
+// false quando o banco ainda não tem a opção de numeração (versão anterior)
+let _hasNumbering = true;
+
 async function loadAll() {
-  const [e, d, s] = await Promise.all([
-    supabase.from('entity').select('id, billing_start_date').maybeSingle(),
+  let [e, d, s] = await Promise.all([
+    supabase.from('entity').select('id, billing_start_date, billing_numbering').maybeSingle(),
     supabase.from('department')
       .select('id, acronym, name, cnpj, responsible_name, responsible_role')
       .order('acronym'),
@@ -66,6 +69,11 @@ async function loadAll() {
       .in('kind', ['posto', 'ambos'])
       .order('legal_name'),
   ]);
+  _hasNumbering = true;
+  if (e.error && /billing_numbering/.test(e.error.message || '')) {
+    _hasNumbering = false;
+    e = await supabase.from('entity').select('id, billing_start_date').maybeSingle();
+  }
   const err = e.error || d.error || s.error;
   if (err) return isMissingColumn(err) ? 'missing' : 'error';
   _entity = e.data;
@@ -169,6 +177,25 @@ function renderConfig() {
         ${rowFoot()}
       </div>
     </div>
+
+    ${_hasNumbering ? `
+    <div class="card" id="cfg-numbering">
+      <h2 class="cfg-title">Numeração das ordens</h2>
+      <p class="cfg-help">Quem dá o número da Ordem de Fornecimento. Use "Informada" quando a ordem já é emitida em outro sistema, para não existirem duas ordens do mesmo fornecimento.</p>
+      <div class="cfg-row is-inline" data-row="numbering">
+        <div class="cfg-fields cfg-fields-wide">
+          <div class="field">
+            <label class="field-label" for="cfg-numbering-mode">Numeração</label>
+            <select class="select" id="cfg-numbering-mode" data-f="billing_numbering">
+              <option value="auto" ${_entity?.billing_numbering !== 'informado' ? 'selected' : ''}>Automática: o Gerir Frota numera (001/2026, 002/2026…)</option>
+              <option value="informado" ${_entity?.billing_numbering === 'informado' ? 'selected' : ''}>Informada: a ordem é emitida em outro sistema</option>
+            </select>
+          </div>
+        </div>
+        ${rowFoot()}
+      </div>
+      <p class="cfg-help cfg-numbering-note" id="cfg-numbering-note">${numberingNote(_entity?.billing_numbering)}</p>
+    </div>` : ''}
 
     <div class="card" id="cfg-depts">
       <h2 class="cfg-title">Secretarias</h2>
@@ -339,6 +366,8 @@ function bindConfig(body) {
   });
   body.addEventListener('change', (e) => {
     if (e.target.dataset?.f) markDirty(e.target.closest('.cfg-row'));
+    // a explicação acompanha a opção escolhida, antes mesmo de salvar
+    if (e.target.id === 'cfg-numbering-mode') document.getElementById('cfg-numbering-note').textContent = numberingNote(e.target.value);
   });
   body.addEventListener('click', (e) => {
     const save = e.target.closest('[data-save]');
@@ -387,6 +416,12 @@ function goTo(targetId) {
   (empty || el.querySelector('[data-f]'))?.focus({ preventScroll: true });
 }
 
+function numberingNote(mode) {
+  return mode === 'informado'
+    ? 'Ao registrar a ordem, o usuário informa o número que ela recebeu no outro sistema. O Gerir Frota gera a relação de abastecimentos e o Termo de Recebimento com esse número. Número repetido na mesma secretaria é recusado.'
+    : 'Cada secretaria tem a sua sequência, que recomeça em 001 a cada ano. O número de uma ordem cancelada não é reaproveitado.';
+}
+
 function readRow(row) {
   const v = {};
   row.querySelectorAll('[data-f]').forEach(i => { v[i.dataset.f] = (i.value || '').trim(); });
@@ -406,6 +441,9 @@ async function saveRow(row) {
     }
     table = 'entity'; match = { id: 1 };
     payload = { billing_start_date: date };
+  } else if (kind === 'numbering') {
+    table = 'entity'; match = { id: 1 };
+    payload = { billing_numbering: v.billing_numbering === 'informado' ? 'informado' : 'auto' };
   } else if (kind === 'dept') {
     const cnpj = onlyDigits(v.cnpj);
     if (cnpj && !isValidCNPJ(cnpj)) {
@@ -455,7 +493,7 @@ async function saveRow(row) {
   }
 
   // Estado local + pendências, sem redesenhar a página (mantém foco e rolagem)
-  if (kind === 'general') Object.assign(_entity, payload);
+  if (kind === 'general' || kind === 'numbering') Object.assign(_entity, payload);
   else Object.assign((kind === 'dept' ? _depts : _contracts).find(x => x.id === id), payload);
   row.classList.remove('is-dirty');
   delete row.dataset.unsaved;
@@ -465,9 +503,12 @@ async function saveRow(row) {
     row.querySelector('[data-chip]').innerHTML = chipHTML(contractMissing(_contracts.find(x => x.id === id)));
   }
   document.getElementById('cfg-pending').innerHTML = pendingHTML();
+  if (kind === 'numbering') document.getElementById('cfg-numbering-note').textContent = numberingNote(payload.billing_numbering);
   setStatus(row, kind === 'general' && payload.billing_start_date
     ? `Salvo. Faturamento a partir de ${fmtDate(payload.billing_start_date)}.`
-    : 'Salvo.', 'ok');
+    : kind === 'numbering'
+      ? (payload.billing_numbering === 'informado' ? 'Salvo. As próximas ordens pedem o número.' : 'Salvo. As próximas ordens são numeradas pelo sistema.')
+      : 'Salvo.', 'ok');
   toast('Configuração salva.', 'success');
 }
 

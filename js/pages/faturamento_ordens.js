@@ -81,6 +81,7 @@ async function load() {
       cancel_reason, canceled_at, created_at,
       items:supply_order_item(fuel_label, fuelings_count, liters)`;
   const TERM_COLS = `,
+      external_number,
       terms:receipt_term(id, number, status, invoice_number, invoice_series, invoice_date,
         issue_date, total_amount, fiscal_name, cancel_reason, canceled_at, created_at)`;
   const query = (cols) => withTimeout(supabase.from('supply_order').select(cols).order('created_at', { ascending: false }));
@@ -88,7 +89,7 @@ async function load() {
   try {
     res = await query(COLS + TERM_COLS);
     _hasTerms = true;
-    if (res.error && /receipt_term|relationship/i.test(res.error.message || '')) {
+    if (res.error && /receipt_term|relationship|external_number/i.test(res.error.message || '')) {
       _hasTerms = false;
       res = await query(COLS);
     }
@@ -236,6 +237,7 @@ function rowHTML(o) {
         <div class="cell-stack">
           <strong class="of-mono">${esc(o.number)}</strong>
           <span class="of-sub of-nowrap" title="${esc(o.department_name_snapshot)}"><b>${esc(o.department_acronym_snapshot)}</b> · ${esc(fmtDate(o.issue_date))}</span>
+          ${o.external_number ? '<span class="of-sub" title="Ordem emitida em outro sistema; o número foi informado">nº informado</span>' : ''}
         </div>
       </td>
       <td data-label="Fornecedor" class="of-col-supplier">
@@ -273,7 +275,7 @@ function rowHTML(o) {
         : '<span class="of-sub">—</span>'}</td>` : ''}
       <td class="actions-col">
         <div class="actions-row">
-          <button class="btn btn-ghost btn-icon btn-sm" data-act="pdf" data-id="${o.id}" title="Abrir a ordem em PDF">${icons.printer}</button>
+          <button class="btn btn-ghost btn-icon btn-sm" data-act="pdf" data-id="${o.id}" title="${o.external_number ? 'Abrir a relação de abastecimentos em PDF' : 'Abrir a ordem em PDF'}">${icons.printer}</button>
           ${term && showTerms() ? `<button class="btn btn-ghost btn-icon btn-sm" data-act="term-pdf" data-id="${o.id}"
               title="Abrir o Termo de Recebimento em PDF">${icons.fileCheck}</button>` : ''}
           ${old.length ? `<button class="btn btn-ghost btn-icon btn-sm" data-act="term-history" data-id="${o.id}"
@@ -440,11 +442,11 @@ function exportList() {
   exportXLSX({
     filename: timestampFilename('ordens_de_fornecimento'),
     sheetName: 'Ordens de Fornecimento',
-    columns: ['Nº', 'Emissão', 'Sigla', 'Secretaria', 'Fornecedor', 'CNPJ', 'Contrato', 'Competência',
+    columns: ['Nº', 'Numeração', 'Emissão', 'Sigla', 'Secretaria', 'Fornecedor', 'CNPJ', 'Contrato', 'Competência',
               'Período início', 'Período fim', 'Abastecimentos', 'Litros', 'Combustíveis', 'Empenho', 'Situação', 'Justificativa do cancelamento',
               'Nota fiscal', 'Série', 'Data da nota', 'Data do termo', 'Valor do termo (R$)', 'Fiscal', 'Termos cancelados'],
     rows: list.map(o => [o, activeTerm(o)]).map(([o, t]) => [
-      o.number, fmtDate(o.issue_date), o.department_acronym_snapshot, o.department_name_snapshot,
+      o.number, o.external_number ? 'Informada' : 'Automática', fmtDate(o.issue_date), o.department_acronym_snapshot, o.department_name_snapshot,
       o.supplier_name_snapshot, fmtCNPJ(o.supplier_cnpj_snapshot), o.contract_number_snapshot || '',
       o.reference_month, fmtDate(o.period_start), fmtDate(o.period_end),
       o.total_fuelings, Number(o.total_liters),

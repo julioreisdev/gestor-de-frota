@@ -16,6 +16,7 @@ import { printSupplyOrder } from '../billing_docs.js';
 
 const st = {
   dept: '', start: '', end: '', issue: '', commitment: '',
+  number: '',           // nº informado (cidade em que a ordem vem de outro sistema)
   contract: '', mode: 'contrato',
   selV: new Set(),      // veículos incluídos
   excl: new Set(),      // abastecimentos desmarcados (exceções)
@@ -26,6 +27,8 @@ const st = {
 let _root = null, _ctx = null;
 let _depts = [], _startDate = null, _lockedDept = null;
 let _contracts = [], _fuelings = [], _unbilled = null;
+let _informed = false;         // numeração informada: a ordem é emitida em outro sistema
+let _deptOrders = [];          // ordens da secretaria, para conferir o número informado
 let _reqC = 0, _reqF = 0;      // descarta respostas de pedidos antigos
 let _loadingC = false, _loadingF = false;
 
@@ -39,7 +42,9 @@ export async function renderNewOrderTab(container, ctx) {
   try {
     base = await withTimeout(Promise.all([
       supabase.from('department').select('id, acronym, name, cnpj, responsible_name, responsible_role').order('acronym'),
-      supabase.from('entity').select('id, billing_start_date').maybeSingle(),
+      supabase.from('entity').select('id, billing_start_date, billing_numbering').maybeSingle()
+        .then(r => (r.error && /billing_numbering/.test(r.error.message || '')
+          ? supabase.from('entity').select('id, billing_start_date').maybeSingle() : r)),
       getProfile()?.role === 'usuario' ? supabase.rpc('current_user_department_id') : Promise.resolve({ data: null }),
       supabase.rpc('billing_unbilled_summary'),
     ]));
@@ -55,6 +60,8 @@ export async function renderNewOrderTab(container, ctx) {
   }
   const [d, e, locked, unbilled] = base;
   _startDate = e.data?.billing_start_date || null;
+  _informed = e.data?.billing_numbering === 'informado';
+  if (!_informed) st.number = '';
   _lockedDept = locked.data || null;
   _depts = (d.data || []).filter(x => !_lockedDept || x.id === _lockedDept);
   _unbilled = (unbilled.data || [])[0] || null;
@@ -86,7 +93,53 @@ export async function renderNewOrderTab(container, ctx) {
 
   renderShell();
   bind();
-  await loadContracts();
+  await Promise.all([loadContracts(), loadDeptOrders()]);
+}
+
+// ---- Número informado ----
+const orderYear = () => Number(String(st.end || '').slice(0, 4)) || new Date().getFullYear();
+const numKey = (n) => String(n || '').trim().toUpperCase();
+const numValue = (n) => { const m = String(n || '').match(/\d+/); return m ? Number(m[0]) : null; };
+
+async function loadDeptOrders() {
+  if (!_informed || !st.dept) { _deptOrders = []; return; }
+  const dept = st.dept;
+  const { data, error } = await supabase.from('supply_order')
+    .select('number, year, status, external_number, created_at')
+    .eq('department_id', dept).order('created_at', { ascending: false });
+  if (dept !== st.dept || !_root.isConnected) return;
+  _deptOrders = error ? [] : (data || []);
+  renderNumberHint(); renderPreview();
+}
+/** Ordens que ocupam número neste exercício: as ativas e as automáticas (mesmo canceladas). */
+const takenOrders = () => _deptOrders.filter(o => Number(o.year) === orderYear() && (o.status !== 'cancelada' || !o.external_number));
+const lastInformed = () => _deptOrders.find(o => Number(o.year) === orderYear() && o.external_number && o.status !== 'cancelada') || null;
+
+/** Erro que impede registrar; '' quando o número pode ser usado. */
+function numberError() {
+  if (!_informed) return '';
+  const n = st.number.trim();
+  if (!n) return 'Informe o número da ordem emitida no outro sistema.';
+  if (takenOrders().some(o => numKey(o.number) === numKey(n))) return `Já existe uma ordem nº ${n} nesta secretaria em ${orderYear()}.`;
+  return '';
+}
+function renderNumberHint() {
+  const box = document.getElementById('nof-number-hint');
+  if (!box) return;
+  const last = lastInformed(), n = st.number.trim();
+  const err = n ? numberError() : '';
+  const a = numValue(n), b = numValue(last?.number);
+  document.getElementById('nof-number').classList.toggle('is-invalid', !!err);
+  if (err) { box.className = 'field-error nof-number-hint'; box.textContent = err; return; }
+  if (n && last && a != null && b != null && a < b) {
+    box.className = 'field-help nof-number-hint nof-hint-warn';
+    box.textContent = `Atenção: o nº ${n} é menor que o último informado nesta secretaria (${last.number}). Confira antes de registrar.`;
+    return;
+  }
+  box.className = 'field-help nof-number-hint';
+  box.textContent = last
+    ? `Último nº de ordem informado nesta secretaria em ${orderYear()}: ${last.number}`
+    : `Nenhuma ordem informada nesta secretaria em ${orderYear()}.`;
 }
 
 function stateCard(icon, title, text) {
@@ -119,12 +172,18 @@ function renderShell() {
 
     <div class="card">
       <h2 class="cfg-title">1 · O que faturar</h2>
-      <p class="cfg-help">A ordem reúne os abastecimentos de um contrato no período. Faturamento a partir de ${esc(fmtDate(_startDate))}.</p>
-      <div class="nof-fields">
+      <p class="cfg-help">A ordem reúne os abastecimentos de um contrato no período. Faturamento a partir de ${esc(fmtDate(_startDate))}.${_informed
+        ? ' A Ordem de Fornecimento é emitida em outro sistema: informe o número dela.' : ''}</p>
+      <div class="nof-fields ${_informed ? 'has-number' : ''}">
         <div class="field nof-f-dept">
           <label class="field-label" for="nof-dept">Secretaria</label>
           <select class="select" id="nof-dept" ${_lockedDept ? 'disabled' : ''}>${deptOptions}</select>
         </div>
+        ${_informed ? `<div class="field nof-f-number">
+          <label class="field-label" for="nof-number">Nº da ordem <span class="req">*</span></label>
+          <input class="input" id="nof-number" maxlength="30" autocomplete="off" value="${esc(st.number)}" placeholder="ex: 045/2026"
+                 aria-describedby="nof-number-hint">
+        </div>` : ''}
         <div class="field">
           <label class="field-label" for="nof-start">Período de</label>
           <input class="input" type="date" id="nof-start" value="${esc(st.start)}">
@@ -142,6 +201,7 @@ function renderShell() {
           <input class="input" id="nof-commitment" maxlength="30" value="${esc(st.commitment)}" placeholder="ex: 2026/000123">
         </div>
       </div>
+      ${_informed ? '<p class="field-help nof-number-hint" id="nof-number-hint"></p>' : ''}
       <div id="nof-period-msg"></div>
       <div class="nof-label">Contratos da secretaria</div>
       <div id="nof-contracts"></div>
@@ -173,6 +233,7 @@ function renderShell() {
     </div>
   `;
   renderTop();
+  renderNumberHint();
 }
 
 function renderTop() {
@@ -182,10 +243,10 @@ function renderTop() {
   if (st.lastEmitted) {
     const o = st.lastEmitted;
     parts.push(`<div class="card">${noticeHTML('ok',
-      `Ordem de Fornecimento ${o.number} emitida`,
+      `Ordem de Fornecimento ${o.number} ${o.informed ? 'registrada' : 'emitida'}`,
       `${fmtInt(o.fuelings)} abastecimentos · ${fmtLiters(o.liters)} L. Os abastecimentos ficaram vinculados à ordem e não podem mais ser alterados.`,
       `<button class="btn btn-primary btn-sm" data-open-pdf="${o.id}">
-         <span style="width:14px;height:14px;display:inline-flex">${icons.printer}</span> Abrir PDF</button>
+         <span style="width:14px;height:14px;display:inline-flex">${icons.printer}</span> ${o.informed ? 'Abrir relação em PDF' : 'Abrir PDF'}</button>
        <button class="btn btn-outline btn-sm" data-go="orders">Ver ordens</button>
        <button class="btn btn-ghost btn-sm" data-dismiss>Fechar</button>`)}</div>`);
   }
@@ -404,7 +465,7 @@ function renderPreview() {
   if (d && !d.cnpj) missing.push('CNPJ');
   if (d && !d.responsible_name) missing.push('responsável');
   if (d && !d.responsible_role) missing.push('cargo do responsável');
-  const err = fin.length ? issueError(fin) : '';
+  const err = fin.length ? (issueError(fin) || numberError()) : '';
 
   box.innerHTML = `
     <div class="nof-kpis">
@@ -456,7 +517,7 @@ function renderPreview() {
         ? `${esc(d?.acronym || '')} · ${c.contract_number ? 'Contrato nº ' + esc(c.contract_number) : esc(c.legal_name)}`
         : ''}</span>
       <button type="button" class="btn btn-primary" id="nof-emit" ${fin.length && !err ? '' : 'disabled'}>
-        <span style="width:16px;height:16px;display:inline-flex">${icons.receipt}</span> Emitir ordem
+        <span style="width:16px;height:16px;display:inline-flex">${icons.receipt}</span> ${_informed ? 'Registrar ordem' : 'Emitir ordem'}
       </button>
     </div>`;
 }
@@ -467,10 +528,10 @@ function renderPreview() {
 function bind() {
   _root.addEventListener('change', (e) => {
     const el = e.target;
-    if (el.id === 'nof-dept') { st.dept = el.value; st.contract = ''; resetSelection(); syncSearchBox(); loadContracts(); return; }
+    if (el.id === 'nof-dept') { st.dept = el.value; st.contract = ''; resetSelection(); syncSearchBox(); loadContracts(); loadDeptOrders(); return; }
     if (el.id === 'nof-start' || el.id === 'nof-end') {
       st[el.id === 'nof-start' ? 'start' : 'end'] = el.value;
-      renderTop(); loadContracts();
+      renderTop(); renderNumberHint(); loadContracts();
       return;
     }
     if (el.id === 'nof-issue') { st.issue = el.value; renderPreview(); return; }
@@ -495,6 +556,7 @@ function bind() {
 
   _root.addEventListener('input', (e) => {
     if (e.target.id === 'nof-commitment') { st.commitment = e.target.value; return; }
+    if (e.target.id === 'nof-number') { st.number = e.target.value; renderNumberHint(); renderPreview(); return; }
     if (e.target.id === 'nof-vsearch') { st.vSearch = e.target.value || ''; syncSearchBox(); renderVehicles(); }
   });
 
@@ -561,48 +623,51 @@ function syncSearchBox() {
 async function emit() {
   const fin = finalList();
   if (!fin.length) return;
-  const err = issueError(fin);
+  const err = issueError(fin) || numberError();
   if (err) { toast(err, 'error'); return; }
   const d = deptObj(), c = contractObj();
+  const number = st.number.trim();
   const liters = fin.reduce((s, f) => s + Number(f.liters), 0);
   const nVeh = new Set(fin.map(f => f.vehicle_id)).size;
 
   const ok = await confirmDialog({
-    title: 'Emitir Ordem de Fornecimento',
+    title: _informed ? `Registrar Ordem de Fornecimento nº ${number}` : 'Emitir Ordem de Fornecimento',
     message: `${d.acronym} · ${c.legal_name}${c.contract_number ? ' · contrato nº ' + c.contract_number : ''}. `
       + `${fmtInt(fin.length)} abastecimentos de ${fmtInt(nVeh)} veículo(s), ${fmtLiters(liters)} litros, `
       + `de ${fmtDate(st.start)} a ${fmtDate(st.end)}. `
-      + 'Depois de emitida, esses abastecimentos não poderão ser alterados nem excluídos.',
-    confirmText: 'Emitir ordem',
+      + (_informed ? 'Depois de registrada' : 'Depois de emitida') + ', esses abastecimentos não poderão ser alterados nem excluídos.',
+    confirmText: _informed ? 'Registrar ordem' : 'Emitir ordem',
   });
   if (!ok) return;
 
   const btn = document.getElementById('nof-emit');
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Emitindo'; }
+  if (btn) { btn.disabled = true; btn.innerHTML = `<span class="spinner"></span> ${_informed ? 'Registrando' : 'Emitindo'}`; }
   let res;
   try {
     res = await withTimeout(supabase.rpc('emit_supply_order', {
       p_supplier: st.contract, p_start: st.start, p_end: st.end,
       p_mode: st.mode, p_fueling_ids: fin.map(f => f.fueling_id),
       p_commitment: st.commitment.trim() || null, p_issue_date: st.issue,
+      ...(_informed ? { p_number: number } : {}),   // só quando a cidade usa número informado
     }), 30000);
   } catch (e) { res = { error: e }; }
 
   if (res.error) {
     toast(billingError(res.error), 'error', 7000);
-    await loadContracts();          // a lista pode ter mudado (outra pessoa emitiu)
+    await Promise.all([loadContracts(), loadDeptOrders()]);   // a lista pode ter mudado (outra pessoa emitiu)
     return;
   }
   const id = res.data;
   const { data: o } = await supabase.from('supply_order').select('id, number, total_fuelings, total_liters').eq('id', id).maybeSingle();
-  st.lastEmitted = { id, number: o?.number || '', fuelings: o?.total_fuelings ?? fin.length, liters: o?.total_liters ?? liters };
-  st.commitment = ''; st.excl = new Set(); st.detailsOpen = false;
+  st.lastEmitted = { id, number: o?.number || number, fuelings: o?.total_fuelings ?? fin.length, liters: o?.total_liters ?? liters, informed: _informed };
+  st.commitment = ''; st.number = ''; st.excl = new Set(); st.detailsOpen = false;
   const inp = document.getElementById('nof-commitment'); if (inp) inp.value = '';
-  toast(`Ordem ${st.lastEmitted.number} emitida.`, 'success');
+  const num = document.getElementById('nof-number'); if (num) num.value = '';
+  toast(`Ordem ${st.lastEmitted.number} ${_informed ? 'registrada' : 'emitida'}.`, 'success');
 
   const { data: u } = await supabase.rpc('billing_unbilled_summary');
   _unbilled = (u || [])[0] || null;
   renderTop();
   document.getElementById('nof-top')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  await loadContracts();
+  await Promise.all([loadContracts(), loadDeptOrders()]);
 }

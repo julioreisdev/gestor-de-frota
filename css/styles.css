@@ -2048,6 +2048,8 @@ input[type="month"]::-webkit-calendar-picker-indicator {
 .cfg-row.is-inline .cfg-fields { grid-template-columns: minmax(0, 240px); flex: 0 0 auto; }
 .cfg-row.is-inline .cfg-foot { margin-top: 0; flex: 1; flex-direction: row-reverse; justify-content: flex-end; min-height: 38px; }
 .cfg-row.is-inline .cfg-status { text-align: left; }
+.cfg-row.is-inline .cfg-fields.cfg-fields-wide { grid-template-columns: minmax(0, 440px); flex: 0 1 440px; }
+.cfg-numbering-note { margin: var(--s-3) 0 0; }
 
 @media (max-width: 900px) {
   .cfg-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -2290,15 +2292,23 @@ input[type="month"]::-webkit-calendar-picker-indicator {
 .trm-history-main { display: grid; gap: 2px; min-width: 0; }
 .trm-history-top { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; font-size: 13.5px; }
 
+/* Com o campo "Nº da ordem" (numeração informada) */
+.nof-fields.has-number { grid-template-columns: minmax(0, 2fr) repeat(5, minmax(0, 1fr)); }
+.nof-number-hint { display: block; margin: var(--s-2) 0 0; }
+.nof-hint-warn { color: var(--warning); font-weight: 600; }
+
 @media (max-width: 1200px) {
-  .nof-fields { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .nof-fields, .nof-fields.has-number { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .nof-fields .nof-f-dept { grid-column: 1 / -1; }
+  .nof-fields.has-number .nof-f-dept { grid-column: span 3; }
 }
 @media (max-width: 1024px) {
   .nof-main { grid-template-columns: 1fr; }
 }
 @media (max-width: 600px) {
-  .nof-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nof-fields, .nof-fields.has-number { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nof-fields.has-number .nof-f-dept, .nof-fields.has-number .nof-f-number { grid-column: 1 / -1; }
+  .cfg-row.is-inline .cfg-fields.cfg-fields-wide { flex: 1 1 100%; }
   .nof-notice { flex-wrap: wrap; }
   .nof-notice-body { flex-basis: calc(100% - 32px); }
   .nof-notice-actions { margin-left: 32px; }

@@ -2233,6 +2233,12 @@ alter table supplier add column if not exists fiscal_ordinance text;
 
 -- c) Entidade
 alter table entity add column if not exists billing_start_date date;
+-- Numeração das ordens: 'auto' = o Gerir Frota numera (NNN/AAAA por secretaria);
+-- 'informado' = a Ordem de Fornecimento é emitida em outro sistema e o usuário
+-- informa o número dela (o Gerir Frota gera a relação de abastecimentos e o termo).
+alter table entity add column if not exists billing_numbering text not null default 'auto';
+alter table entity drop constraint if exists chk_entity_billing_numbering;
+alter table entity add constraint chk_entity_billing_numbering check (billing_numbering in ('auto','informado'));
 
 -- d) Unicidade passa a incluir o nº do contrato (renovação de contrato com o
 --    mesmo posto vira um cadastro novo, sem sobrescrever o anterior).
@@ -2352,6 +2358,14 @@ drop trigger if exists trg_supply_order_set_updated_at on supply_order;
 create trigger trg_supply_order_set_updated_at before update on supply_order
   for each row execute function set_updated_at();
 create index if not exists ix_supply_order_supplier on supply_order (supplier_id);
+-- Ordem com número informado (emitida em outro sistema): não tem sequencial próprio
+alter table supply_order add column if not exists external_number boolean not null default false;
+alter table supply_order alter column seq drop not null;
+alter table supply_order drop constraint if exists chk_so_seq;
+alter table supply_order add constraint chk_so_seq check (external_number or seq is not null);
+-- O mesmo número não se repete na secretaria e no exercício entre ordens ativas
+create unique index if not exists ux_supply_order_number_active
+  on supply_order (department_id, year, upper(btrim(number))) where status <> 'cancelada';
 create index if not exists ix_supply_order_department on supply_order (department_id, year);
 
 create table if not exists supply_order_item (               -- um por combustível (tipo + subtipo)
@@ -2638,6 +2652,8 @@ revoke all on function billing_pending_contracts(uuid, date, date) from public;
 grant execute on function billing_pending_contracts(uuid, date, date) to authenticated;
 
 -- Emite a OF. Revalida cada abastecimento (não confia na tela).
+-- p_number: só quando a cidade usa número informado (ordem de outro sistema).
+drop function if exists emit_supply_order(uuid, date, date, text, uuid[], text, date);
 create or replace function emit_supply_order(
   p_supplier uuid,
   p_start date,
@@ -2645,7 +2661,8 @@ create or replace function emit_supply_order(
   p_mode text,
   p_fueling_ids uuid[],
   p_commitment text default null,
-  p_issue_date date default null
+  p_issue_date date default null,
+  p_number text default null
 ) returns uuid
 language plpgsql security definer set search_path = public, auth as $$
 declare
@@ -2654,6 +2671,8 @@ declare
   v_ids uuid[]; v_n integer; v_ok integer; v_liters numeric; v_last date;
   v_year smallint; v_seq integer; v_number text; v_id uuid;
   v_commitment text := nullif(btrim(coalesce(p_commitment, '')), '');
+  v_ext text := nullif(btrim(coalesce(p_number, '')), '');
+  v_numbering text; v_informed boolean;
 begin
   select * into v_sup from supplier where id = p_supplier;
   if v_sup.id is null then raise exception 'Contrato não encontrado.'; end if;
@@ -2664,10 +2683,18 @@ begin
   perform _billing_require(v_sup.department_id);
   select * into v_dep from department where id = v_sup.department_id;
 
-  select billing_start_date into v_start from entity where id = 1;
+  select billing_start_date, billing_numbering into v_start, v_numbering from entity where id = 1;
+  v_informed := coalesce(v_numbering, 'auto') = 'informado';
   if v_start is null then
     raise exception 'Defina a data de início do faturamento na Configuração antes de emitir a primeira ordem.';
   end if;
+  if v_informed and v_ext is null then
+    raise exception 'Informe o número da Ordem de Fornecimento emitida no outro sistema.';
+  end if;
+  if not v_informed and v_ext is not null then
+    raise exception 'Esta cidade usa numeração automática. Atualize a tela e tente de novo.';
+  end if;
+  if length(v_ext) > 30 then raise exception 'O número da ordem tem no máximo 30 caracteres.'; end if;
   if p_start is null or p_end is null or p_end < p_start then raise exception 'Período inválido.'; end if;
   if p_mode not in ('contrato','veiculos') then raise exception 'Modo de seleção inválido.'; end if;
 
@@ -2699,9 +2726,28 @@ begin
     raise exception 'A data de emissão não pode ser anterior ao último abastecimento da ordem (%).', to_char(v_last, 'DD/MM/YYYY');
   end if;
 
-  select coalesce(max(seq), 0) + 1 into v_seq
-    from supply_order where department_id = v_sup.department_id and year = v_year;
-  v_number := lpad(v_seq::text, greatest(3, length(v_seq::text)), '0') || '/' || v_year::text;
+  if v_informed then
+    -- O número é o da ordem do outro sistema. Não repete entre ordens ativas;
+    -- o de uma ordem cancelada aqui pode ser informado de novo.
+    if exists (select 1 from supply_order o
+                where o.department_id = v_sup.department_id and o.year = v_year
+                  and upper(btrim(o.number)) = upper(v_ext)
+                  and (o.status <> 'cancelada' or not o.external_number)) then
+      raise exception 'Já existe uma ordem nº % nesta secretaria em %.', v_ext, v_year;
+    end if;
+    v_seq := null;
+    v_number := v_ext;
+  else
+    select coalesce(max(seq), 0) + 1 into v_seq
+      from supply_order where department_id = v_sup.department_id and year = v_year;
+    loop   -- pula número que já tenha sido informado à mão (cidade que trocou de modo)
+      v_number := lpad(v_seq::text, greatest(3, length(v_seq::text)), '0') || '/' || v_year::text;
+      exit when not exists (select 1 from supply_order o
+                             where o.department_id = v_sup.department_id and o.year = v_year
+                               and upper(btrim(o.number)) = v_number);
+      v_seq := v_seq + 1;
+    end loop;
+  end if;
 
   insert into supply_order (
     department_id, supplier_id, year, seq, number, reference_month,
@@ -2711,7 +2757,7 @@ begin
     department_name_snapshot, department_acronym_snapshot, department_cnpj_snapshot,
     responsible_name_snapshot, responsible_role_snapshot,
     supplier_name_snapshot, supplier_cnpj_snapshot, contract_number_snapshot,
-    created_by
+    external_number, created_by
   ) values (
     v_sup.department_id, p_supplier, v_year, v_seq, v_number, to_char(p_end, 'MM/YYYY'),
     p_start, p_end, v_issue, p_mode,
@@ -2722,7 +2768,7 @@ begin
     v_dep.name, v_dep.acronym, v_dep.cnpj,
     v_dep.responsible_name, v_dep.responsible_role,
     v_sup.legal_name, v_sup.cnpj, v_sup.contract_number,
-    auth.uid()
+    v_informed, auth.uid()
   ) returning id into v_id;
 
   insert into supply_order_item (supply_order_id, fuel_type_code, fuel_subtype_id, fuel_label, fuelings_count, liters)
@@ -2760,8 +2806,8 @@ begin
   return v_id;
 end;
 $$;
-revoke all on function emit_supply_order(uuid, date, date, text, uuid[], text, date) from public;
-grant execute on function emit_supply_order(uuid, date, date, text, uuid[], text, date) to authenticated;
+revoke all on function emit_supply_order(uuid, date, date, text, uuid[], text, date, text) from public;
+grant execute on function emit_supply_order(uuid, date, date, text, uuid[], text, date, text) to authenticated;
 
 -- Empenho pode ser informado depois, enquanto a OF estiver só emitida.
 create or replace function set_supply_order_commitment(p_order uuid, p_commitment text) returns void

@@ -81,6 +81,10 @@ export function supplyOrderHTML({ entity, city, order, items, fuelings }) {
   const contratante = `${esc(order.department_name_snapshot)} · CNPJ ${esc(order.department_cnpj_snapshot ? fmtCNPJ(order.department_cnpj_snapshot) : '—')}`;
   const contratada = `${esc(order.supplier_name_snapshot)} · CNPJ ${esc(fmtCNPJ(order.supplier_cnpj_snapshot))}`;
 
+  // Ordem emitida em outro sistema: aqui sai só a relação que acompanha a ordem,
+  // sem o texto de autorização, para não existirem duas ordens do mesmo fornecimento.
+  const external = !!order.external_number;
+
   const itemRows = items.map((it, i) => `
     <tr><td>${i + 1}</td><td>${esc(it.fuel_label)}</td><td>L</td>
         <td class="n">${it.fuelings_count}</td><td class="n">${fmtLiters(it.liters)}</td></tr>`).join('');
@@ -92,17 +96,17 @@ export function supplyOrderHTML({ entity, city, order, items, fuelings }) {
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<title>Ordem de Fornecimento ${esc(order.number)} - ${esc(order.department_acronym_snapshot)}</title>
+<title>${external ? 'Relação de abastecimentos da ordem' : 'Ordem de Fornecimento'} ${esc(order.number)} - ${esc(order.department_acronym_snapshot)}</title>
 <style>${DOC_CSS}</style>
 </head>
 <body>
 ${headerHTML(entity, order)}
 
 <div class="titulo">
-  <h1>ORDEM DE FORNECIMENTO</h1>
-  <div class="num">Nº ${esc(order.number)} · Combustíveis · Competência ${esc(order.reference_month)}</div>
+  <h1>${external ? 'RELAÇÃO DE ABASTECIMENTOS' : 'ORDEM DE FORNECIMENTO'}</h1>
+  <div class="num">${external ? 'Ordem de Fornecimento nº' : 'Nº'} ${esc(order.number)} · Combustíveis · Competência ${esc(order.reference_month)}</div>
 </div>
-${canceledHTML(order, 'ORDEM CANCELADA')}
+${canceledHTML(order, external ? 'RELAÇÃO CANCELADA' : 'ORDEM CANCELADA')}
 
 <h2>1. Dados do contrato</h2>
 <table class="dados">
@@ -111,7 +115,7 @@ ${canceledHTML(order, 'ORDEM CANCELADA')}
   <tr><td><span class="k">Contrato nº</span>${esc(dash(order.contract_number_snapshot))}</td>
       <td><span class="k">Nota de empenho nº</span>${esc(empenho || 'a informar')}</td></tr>
   <tr><td><span class="k">Período de fornecimento</span>${esc(periodo)}</td>
-      <td><span class="k">Data de emissão</span>${esc(fmtDate(order.issue_date))}</td></tr>
+      <td><span class="k">${external ? 'Data da relação' : 'Data de emissão'}</span>${esc(fmtDate(order.issue_date))}</td></tr>
 </table>
 
 <h2>2. Quantidade</h2>
@@ -122,13 +126,20 @@ ${canceledHTML(order, 'ORDEM CANCELADA')}
   </tbody>
 </table>
 
+${external ? `
+<p class="texto">
+  Relação dos abastecimentos que compõem a Ordem de Fornecimento nº <b>${esc(order.number)}</b>, emitida para a empresa
+  <b>${esc(order.supplier_name_snapshot)}</b>: <b>${fmtLiters(order.total_liters)} litros</b> de combustíveis em
+  <b>${order.total_fuelings} abastecimentos</b> realizados ao ${esc(order.department_name_snapshot)} no período de ${esc(periodo)}.
+  Este documento acompanha a ordem e não a substitui.
+</p>` : `
 <p class="texto">
   Fica autorizada a empresa <b>${esc(order.supplier_name_snapshot)}</b> a faturar o fornecimento de
   <b>${fmtLiters(order.total_liters)} litros</b> de combustíveis realizado ao
   ${esc(order.department_name_snapshot)} no período de ${esc(periodo)},
   conforme as quantidades acima e a relação anexa. A nota fiscal deve ser emitida em nome do
   ${esc(order.department_acronym_snapshot)}, informando o nº desta ordem e do contrato${empenho ? ` e o empenho nº ${esc(empenho)}` : ''}.
-</p>
+</p>`}
 <p class="local">${esc(city || '')} (PI), ${esc(fmtDate(order.issue_date))}.</p>
 
 <div class="assinaturas">
@@ -136,7 +147,7 @@ ${canceledHTML(order, 'ORDEM CANCELADA')}
 </div>
 
 <div class="anexo">
-  <h2>Anexo · Relação de abastecimentos</h2>
+  <h2>${external ? 'Abastecimentos' : 'Anexo · Relação de abastecimentos'}</h2>
   <table class="lista">
     <thead><tr><th>Data</th><th>Autorização</th><th>Placa</th><th>Combustível</th><th class="n">Litros</th></tr></thead>
     <tbody>${fuelingRows}
@@ -298,7 +309,7 @@ export async function printSupplyOrder(orderId) {
   const city = await municipalityName(entity);
   const items = [...(o.data.items || [])].sort((a, b) => String(a.fuel_label).localeCompare(String(b.fuel_label)));
   const html = supplyOrderHTML({ entity, city, order: o.data, items, fuelings: f.data || [] });
-  const win = openPrintTab(html, { title: `Ordem de Fornecimento ${o.data.number}` });
+  const win = openPrintTab(html, { title: `${o.data.external_number ? 'Relação da ordem' : 'Ordem de Fornecimento'} ${o.data.number}` });
   if (!win) toast('O navegador bloqueou a nova aba. Permita pop-ups para este site e tente de novo.', 'warning', 7000);
   return !!win;
 }
