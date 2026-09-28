@@ -186,18 +186,25 @@ function fillFilterSelects() {
   if (_filter.dept)    document.getElementById('ff-dept').value = _filter.dept;
   if (_filter.supplier) document.getElementById('ff-sup').value = _filter.supplier;
   if (_filter.fuel)    document.getElementById('ff-fuel').value = _filter.fuel;
-  // Filtro de motorista: só aparece quando algum abastecimento tem motorista
+  fillDriverFilter();
+  const fb = document.getElementById('ff-billing');
+  fb.hidden = !_hasBilling;
+  if (!_hasBilling) _filter.billing = '';
+  fb.value = _filter.billing;
+  updateClear();
+}
+
+/** Filtro de motorista: só aparece quando algum abastecimento tem motorista.
+ *  Refeito a cada listagem, para incluir o motorista de um registro recém-salvo. */
+function fillDriverFilter() {
   const fd = document.getElementById('ff-driver');
+  if (!fd) return;
   const names = [...new Set(_items.map(a => a.driver_name_snapshot).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   if (_filter.driver && _filter.driver !== 'none' && !names.includes(_filter.driver)) _filter.driver = '';
   fd.hidden = !names.length;
   fd.innerHTML = '<option value="">Todos motoristas</option><option value="none">Sem motorista</option>' +
     names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
   fd.value = _filter.driver;
-  const fb = document.getElementById('ff-billing');
-  fb.hidden = !_hasBilling;
-  if (!_hasBilling) _filter.billing = '';
-  fb.value = _filter.billing;
   updateClear();
 }
 
@@ -248,6 +255,7 @@ function renderStats() {
 function renderTable() {
   const box = document.getElementById('abs-tablebox');
   const countEl = document.getElementById('abs-count');
+  fillDriverFilter();
   if (!_items.length) {
     if (countEl) countEl.textContent = '';
     box.innerHTML = `

@@ -344,7 +344,7 @@ function friendlyError(err) {
   }
   // foreign key violation (veículos/fornecedores vinculados)
   if (err?.code === '23503' || /foreign key|violates/i.test(msg)) {
-    return 'Não é possível excluir: há veículos ou fornecedores vinculados a esta secretaria.';
+    return 'Não é possível excluir: há veículos, fornecedores, motoristas ou Ordens de Fornecimento vinculados a esta secretaria.';
   }
   return msg;
 }

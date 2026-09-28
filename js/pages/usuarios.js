@@ -384,5 +384,10 @@ async function savePassword(id) {
 }
 
 function err_msg(error) {
-  return error?.message || 'Erro desconhecido';
+  const msg = error?.message || '';
+  // Usuário com registros (autorizações, abastecimentos, ordens, termos, motoristas) não sai do banco
+  if (error?.code === '23503' || /foreign key/i.test(msg)) {
+    return 'Este usuário tem registros no sistema e não pode ser excluído. Desative o acesso em vez de excluir.';
+  }
+  return msg || 'Erro desconhecido';
 }

@@ -80,9 +80,11 @@ Reaproveitar o módulo `js/print.js` que já existe.
 4. **Autorizações de abastecimento** — emitidas para um veículo/fornecedor/combustível/qtd, com **QR Code** para o motorista mostrar ao frentista.
 5. **Abastecimentos** — registro de consumo. Pode ser manual ou gerado a partir de autorização. O fornecedor (frentista) preenche os campos finais (qtd real, KM, valor) lendo o QR.
 6. **Manutenções** — escopo previsto mas **menos prioritário**. Cliente não modelou no `cliente.html`. Pendente de definição.
-7. **Relatórios internos** — agregados por veículo / secretaria / fornecedor / combustível, com filtros e exportação PDF/XLSX.
+7. **Relatórios internos** — agregados por veículo / secretaria / fornecedor / combustível / motorista, com filtros e exportação PDF/XLSX.
 8. **Exportação TCE-PI** — três layouts CSV obrigatórios (cód. 503, 443, 517 — ver abaixo).
 9. **Usuários** — multi-perfil (admin / usuario / fornecedor), com período de acesso opcional.
+10. **Faturamento** — Ordem de Fornecimento e Termo de Recebimento de combustível, por secretaria e contrato (ver [Faturamento e Motoristas](#faturamento-e-motoristas-set2026)).
+11. **Motoristas** — cadastro com CNH e cursos; motorista opcional na autorização e no abastecimento.
 
 ## Perfis de acesso
 
@@ -315,9 +317,40 @@ O `cliente.html` foi gerado por IA e tem coisas que **não** vão pra produção
 
 - `cliente.html` no repo apenas como referência conceitual.
 - `/docs` populado com **specs oficiais do TCE-PI** (manuais técnicos mar/2026, regras de validação mar–mai/2026, leiautes 2025, planilhas de domínio, CSVs de exemplo, lista IBGE). Tudo lido e consolidado neste arquivo.
-- `modelagem.md` na raiz: proposta inicial de schema Supabase.
-- Nada de código de produção escrito ainda.
+- `modelagem.md` na raiz: proposta inicial de schema Supabase (histórica; o schema real é o `init.sql`).
+- Sistema em produção em duas instâncias: Jurema e Anísio de Abreu.
+- Faturamento e Motoristas publicados em 28/09/2026.
 - Próximos passos serão definidos pelo usuário (lembrete: **nunca começar sem perguntar**).
+
+## Faturamento e Motoristas (set/2026)
+
+O detalhe completo (regras, telas, testes) está em `PLANEJAMENTO_FATURAMENTO_MOTORISTAS.md`, na raiz e fora do git. O essencial para não quebrar nada:
+
+### Faturamento
+
+- **Contrato = cadastro de fornecedor** (posto + secretaria + nº do contrato). Não existe tabela de contrato. O mesmo posto tem um cadastro por contrato.
+- **Ordem de Fornecimento** (`supply_order`): reúne abastecimentos de um contrato num período, só quantidades. Numeração `NNN/AAAA` por secretaria e exercício.
+- **Termo de Recebimento** (`receipt_term`): gerado da ordem quando a nota fiscal chega. Número = número da ordem. No máximo um termo ativo por ordem.
+- **Toda escrita passa por função** (`emit_supply_order`, `cancel_supply_order`, `set_supply_order_commitment`, `emit_receipt_term`, `cancel_receipt_term`). As tabelas do faturamento só têm política de leitura.
+- **Abastecimento em ordem fica travado** por gatilho (`trg_fueling_billing_lock`). As funções do faturamento passam pela trava com `set_config('gerirfrota.billing_bypass', '1', true)`.
+- **Documentos congelados**: `supply_order_fueling` guarda cópia dos dados de cada abastecimento. Os PDFs são montados só com essa cópia.
+- **Cálculo do termo** no banco, em `numeric`, arredondando meio para cima: valor do item = `round(litros × preço, 2)`; a diferença de centavos vai para o último abastecimento de cada combustível.
+- **Valor faturado**: `fueling.invoiced_total`. As telas usam esse valor quando existe (via `applyInvoicedTotals` / `queryFuelings` em [js/billing.js](js/billing.js)); senão, `total`.
+- **Numeração informada** (`entity.billing_numbering = 'informado'`): para cidade em que a ordem é emitida em outro sistema (Anísio de Abreu). O usuário digita o número, o PDF sai como "Relação de abastecimentos" e não como ordem.
+- **Posto enxerga por CNPJ** (`current_user_supplier_ids()`), não por cadastro: vê autorizações, abastecimentos e ordens de todos os contratos do seu CNPJ. Não vê termos nem motoristas.
+
+### Motoristas
+
+- Obrigatórios só nome e CPF. CPF validado na tela e no banco (`is_valid_cpf`).
+- Cadastro e cursos são gravados juntos por `save_driver`.
+- Motorista é **sempre opcional** e a situação da CNH **só avisa, nunca bloqueia** (decisão do cliente).
+- **As funções `emit_authorization` e `emit_service_authorization` não foram alteradas.** A emissão com motorista usa `emit_authorization_with_driver` e `emit_service_authorization_with_driver`, que chamam as antigas. Manter assim.
+- O nome do motorista é gravado como cópia (`driver_name_snapshot`) na autorização, no abastecimento e na manutenção.
+- Regras de CNH e o campo de escolha ficam em [js/drivers.js](js/drivers.js).
+
+### Tolerância a banco desatualizado
+
+As telas novas funcionam com o banco na versão anterior: quando uma coluna ou tabela não existe, a consulta é repetida sem ela e o recurso some da tela. Ao acrescentar coluna em consulta existente, manter esse padrão.
 
 ## Arquivos de referência em `/docs`
 

@@ -827,7 +827,7 @@ function friendlyError(err) {
     return 'Registro duplicado.';
   }
   if (err?.code === '23503' || /foreign key/i.test(msg)) {
-    return 'Não é possível excluir: há autorizações ou abastecimentos vinculados.';
+    return 'Não é possível excluir: há autorizações, abastecimentos ou Ordens de Fornecimento vinculados.';
   }
   if (/chk_balance_within_contract/.test(msg)) {
     return 'Saldo atual não pode ser maior que o contrato.';
