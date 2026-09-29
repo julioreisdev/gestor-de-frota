@@ -199,13 +199,13 @@ function renderConfig() {
 
     <div class="card" id="cfg-depts">
       <h2 class="cfg-title">Secretarias</h2>
-      <p class="cfg-help">Cada secretaria é uma unidade gestora: tem CNPJ próprio e numeração própria de ordens. O responsável assina os documentos.</p>
+      <p class="cfg-help">Cada secretaria é uma unidade gestora: tem CNPJ próprio e numeração própria de ordens. O responsável assina os documentos. São os mesmos campos do cadastro de Secretarias: o que for preenchido aqui aparece lá, e vice-versa.</p>
       ${_depts.length ? _depts.map(deptRowHTML).join('') : `<p class="cfg-empty">Nenhuma secretaria cadastrada.</p>`}
     </div>
 
     <div class="card" id="cfg-contracts">
       <h2 class="cfg-title">Contratos</h2>
-      <p class="cfg-help">Cada cadastro de posto é um contrato com uma secretaria. Para um contrato novo com o mesmo posto, cadastre um novo fornecedor com o novo número.</p>
+      <p class="cfg-help">Cada cadastro de posto é um contrato com uma secretaria. Para um contrato novo com o mesmo posto, cadastre um novo fornecedor com o novo número. São os mesmos campos do cadastro de Fornecedores.</p>
       <div class="table-toolbar">
         <div class="search ${_search ? 'has-value' : ''}" id="cfg-search-box">
           ${icons.search}

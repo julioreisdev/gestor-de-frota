@@ -1,10 +1,11 @@
-import { pageRoot, pageHeader } from '../shell.js';
+import { pageRoot, pageHeader, getEntity } from '../shell.js';
 import { supabase } from '../supabase.js';
 import { esc, fmtDate, toast, openModal, closeModal, confirmDialog, formValues, formatPlate, cleanPlate } from '../ui.js';
 import { icons } from '../icons.js';
 import { printList, buildFiltersLabel } from '../print.js';
 import { exportXLSX, timestampFilename } from '../export.js';
 import { isAdmin } from '../auth.js';
+import { readCRLV, norm } from '../crlv.js';
 
 const CONSERV = ['Ótimo', 'Bom', 'Regular', 'Ruim', 'Inativo'];
 
@@ -487,6 +488,18 @@ function openVeicModal(id) {
   const editing = !!id;
   const v = editing ? _items.find(x => x.id === id) : null;
   const body = `
+    <div class="crlv-box">
+      <span class="crlv-icon">${icons.fileUp}</span>
+      <div class="crlv-text">
+        <strong>Preencher pelo CRLV</strong>
+        <span>Selecione o PDF do CRLV Digital. O arquivo é lido no próprio aparelho e não é enviado nem guardado.</span>
+      </div>
+      <label class="btn btn-outline btn-sm crlv-btn" id="crlv-btn">
+        <span class="crlv-btn-label">Selecionar PDF</span>
+        <input type="file" id="crlv-file" accept="application/pdf,.pdf" hidden>
+      </label>
+    </div>
+    <div id="crlv-result"></div>
     <form id="veic-form" autocomplete="off">
       ${section('🪪 Identificação')}
       <div class="form-grid">
@@ -688,12 +701,152 @@ function openVeicModal(id) {
   });
   updateConditionalBlocks();
 
+  // Preencher pelo CRLV: lê o PDF no navegador e preenche o formulário.
+  // Nada é salvo até o usuário clicar em Salvar.
+  const crlvInput = m.querySelector('#crlv-file');
+  crlvInput.addEventListener('change', async () => {
+    const file = crlvInput.files?.[0];
+    crlvInput.value = '';                 // permite escolher o mesmo arquivo de novo
+    if (!file) return;
+    const btn = m.querySelector('#crlv-btn'), label = btn.querySelector('.crlv-btn-label');
+    const box = m.querySelector('#crlv-result');
+    btn.classList.add('is-loading'); label.innerHTML = '<span class="spinner"></span> Lendo…';
+    box.innerHTML = '';
+    try {
+      const data = await readCRLV(file);
+      const ctx = await crlvContext();
+      if (!m.isConnected) return;
+      box.innerHTML = applyCRLV(m, data, ctx, id);
+    } catch (e) {
+      if (!m.isConnected) return;
+      box.innerHTML = `<div class="nof-notice is-block crlv-result">
+        <span class="nof-notice-icon">${icons.alert}</span>
+        <div class="nof-notice-body"><strong>Não foi possível ler o CRLV</strong><span>${esc(e?.message || String(e))}</span></div>
+      </div>`;
+    } finally {
+      btn.classList.remove('is-loading'); label.textContent = 'Selecionar PDF';
+    }
+  });
+  // Campo preenchido pelo CRLV perde o destaque quando o usuário mexe nele
+  m.querySelector('#veic-form').addEventListener('input', (e) => e.target.classList?.remove('is-autofilled'));
+  m.querySelector('#veic-form').addEventListener('change', (e) => e.target.classList?.remove('is-autofilled'));
+
   function updateConditionalBlocks() {
     const o = Number(originSel.value);
     document.getElementById('block-cedido').style.display = (o === 2) ? '' : 'none';
     document.getElementById('block-locado').style.display = (o === 3 || o === 4) ? '' : 'none';
   }
 }
+
+// =============================================================================
+// PREENCHER PELO CRLV
+// =============================================================================
+/** Dados para reconhecer se o proprietário do CRLV é a própria prefeitura. */
+async function crlvContext() {
+  const [entity, depts] = await Promise.all([
+    getEntity().catch(() => null),
+    supabase.from('department').select('id, acronym, name, cnpj').then(r => (r.error ? [] : r.data || [])),
+  ]);
+  let city = '';
+  if (entity?.ibge_code) {
+    const { data } = await supabase.from('ibge_municipality').select('name').eq('code', entity.ibge_code).maybeSingle();
+    city = data?.name || '';
+  }
+  return { organ: entity?.organ_name || '', city, depts };
+}
+
+/** Preenche o formulário com o que foi lido e devolve o resumo (HTML). */
+function applyCRLV(m, d, ctx, editingId) {
+  const form = m.querySelector('#veic-form');
+  const filledList = [];
+  const warnings = [];
+  const setField = (name, value, label) => {
+    const el = form.querySelector(`[name="${name}"]`);
+    if (!el || value == null || value === '') return false;
+    el.value = String(value);
+    el.classList.add('is-autofilled');
+    filledList.push(label);
+    return true;
+  };
+  const setSelect = (el, value, label) => {
+    if (!el || ![...el.options].some(o => o.value === String(value))) return false;
+    el.value = String(value);
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.classList.add('is-autofilled');
+    filledList.push(label);
+    return true;
+  };
+
+  if (d.plate) setField('plate', formatPlate(d.plate), 'Placa');
+  if (d.renavam) setField('renavam', d.renavam, 'RENAVAM');
+  if (d.chassis) setField('chassis', d.chassis, 'Chassi');
+  if (d.model) setField('model', d.model, 'Modelo');
+  if (d.brand) setField('brand', d.brand, 'Marca');
+  if (d.year_manufacture) setField('year_manufacture', d.year_manufacture, 'Ano de fabricação');
+  if (d.year_model) setField('year_model', d.year_model, 'Ano do modelo');
+
+  const typeSel = form.querySelector('#veic-type-select');
+  if (d.vehicle_type_code) {
+    const t = _types.find(x => x.code === d.vehicle_type_code);
+    setSelect(typeSel, d.vehicle_type_code, `Tipo (${t?.description || d.vehicle_type_code})`);
+  } else if (d.vehicle_type_text) {
+    warnings.push(`Espécie/tipo "${d.vehicle_type_text}" não corresponde a um tipo da tabela do TCE: escolha o tipo à mão.`);
+  }
+
+  const fuelSel = form.querySelector('#veic-fuel-combo');
+  if (d.fuel_type_code) {
+    const f = _fuels.find(x => x.code === d.fuel_type_code);
+    const current = decFuelValue(fuelSel.value);
+    // Se já havia um subtipo do mesmo combustível (ex.: Diesel S10), mantém
+    if (current.fuel_type_code !== d.fuel_type_code) {
+      setSelect(fuelSel, encFuelValue(d.fuel_type_code, null), `Combustível (${f?.description || d.fuel_type_code})`);
+    }
+    if (subsOf(d.fuel_type_code).length && !decFuelValue(fuelSel.value).fuel_subtype_id) warnings.push(`Combustível ${f?.description || ''}: se quiser, escolha o subtipo (ex.: S10).`);
+  } else if (d.fuel_text) {
+    warnings.push(`Combustível "${d.fuel_text}" não foi reconhecido: escolha à mão.`);
+  }
+
+  // Proprietário: é a própria prefeitura (ou um fundo/secretaria dela)?
+  const byDoc = d.owner_doc ? ctx.depts.filter(x => x.cnpj && x.cnpj === d.owner_doc) : [];
+  const owner = norm(d.owner_name);
+  const ownByName = !!owner && (
+    (ctx.organ && owner === norm(ctx.organ)) ||
+    (ctx.city && owner.includes(norm(ctx.city)) && /PREFEITURA|MUNICIPIO|FUNDO MUNICIPAL|SECRETARIA MUNICIPAL|CAMARA MUNICIPAL/.test(owner)));
+  const own = byDoc.length > 0 || ownByName;
+  const originSel = form.querySelector('#veic-origin-select');
+  const deptSel = form.querySelector('[name="department_id"]');
+  const docTxt = d.owner_doc ? ` (${d.owner_doc.length === 14 ? fmtDoc14(d.owner_doc) : fmtDoc11(d.owner_doc)})` : '';
+  if (own) {
+    if (Number(originSel.value) !== 1) setSelect(originSel, 1, 'Origem (Próprio)');
+    if (byDoc.length === 1 && !deptSel.value) setSelect(deptSel, byDoc[0].id, `Secretaria (${byDoc[0].acronym}, pelo CNPJ do proprietário)`);
+  } else if (d.owner_name) {
+    warnings.push(`O proprietário no CRLV é ${d.owner_name}${docTxt}, não a prefeitura. Se o veículo for locado ou cedido, ajuste a origem${d.owner_doc ? '; os dados do locador já ficam preenchidos' : ''}.`);
+    const lessorDoc = form.querySelector('[name="lessor_doc"]'), lessorName = form.querySelector('[name="lessor_name"]');
+    if (d.owner_doc && !lessorDoc.value) { lessorDoc.value = d.owner_doc; lessorDoc.classList.add('is-autofilled'); }
+    if (!lessorName.value) { lessorName.value = d.owner_name.slice(0, 200); lessorName.classList.add('is-autofilled'); }
+  }
+
+  // Veículo já cadastrado com a mesma placa ou RENAVAM
+  const dup = _items.find(x => x.id !== editingId && ((d.plate && x.plate === d.plate) || (d.renavam && x.renavam === d.renavam)));
+  if (dup) warnings.unshift(`Já existe um veículo cadastrado com ${dup.plate === d.plate ? 'esta placa' : 'este RENAVAM'}: ${formatPlate(dup.plate)} — ${dup.model}. Para atualizar, feche e edite o cadastro existente.`);
+
+  if (Number(typeSel.value) === 99) warnings.push('Tipo "Outros" exige placa começando com XYZ e RENAVAM 99999999999 no TCE: confira.');
+
+  const missing = ['Capacidade do tanque', 'KM atual'];
+  if (!deptSel.value) missing.push('Secretaria');
+  return `
+    <div class="nof-notice ${dup ? 'is-block' : 'is-ok'} crlv-result">
+      <span class="nof-notice-icon">${dup ? icons.alert : icons.check}</span>
+      <div class="nof-notice-body">
+        <strong>${filledList.length} campo(s) preenchido(s) pelo CRLV${d.plate ? ' · ' + esc(formatPlate(d.plate)) : ''}</strong>
+        <span>${esc(filledList.join(', '))}. Confira antes de salvar; os campos preenchidos ficam destacados.</span>
+        <span>Não constam no CRLV: ${esc(missing.join(', '))}.</span>
+      </div>
+    </div>
+    ${warnings.map(w => `<p class="nof-warn crlv-warn"><span class="nof-warn-icon">${icons.alert}</span><span>${esc(w)}</span></p>`).join('')}`;
+}
+const fmtDoc14 = (d) => `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
+const fmtDoc11 = (d) => `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
 
 function applyOutrosDefaults(modal) {
   const plateIn = modal.querySelector('[name="plate"]');

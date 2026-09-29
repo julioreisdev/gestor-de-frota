@@ -74,7 +74,7 @@ Reaproveitar o módulo `js/print.js` que já existe.
 
 ## Módulos do sistema (escopo)
 
-1. **Veículos** — cadastro com todos os campos exigidos pelo TCE.
+1. **Veículos** — cadastro com todos os campos exigidos pelo TCE. Pode ser preenchido pelo PDF do CRLV Digital ([js/crlv.js](js/crlv.js)): o PDF é lido no navegador com pdf.js e não é enviado nem guardado; nada é salvo até o usuário clicar em Salvar.
 2. **Secretarias / Órgãos** — sigla, nome, centro de custo, responsável.
 3. **Fornecedores** — postos de combustível e **mecânicas** (mesmo cadastro, distinto pelo tipo de serviço). Inclui controle de **saldo de contrato por combustível**.
 4. **Autorizações de abastecimento** — emitidas para um veículo/fornecedor/combustível/qtd, com **QR Code** para o motorista mostrar ao frentista.
