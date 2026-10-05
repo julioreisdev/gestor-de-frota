@@ -3,7 +3,8 @@
 // exigem: data de início, dados das secretarias e dados dos contratos.
 // =============================================================================
 import { supabase } from '../supabase.js';
-import { esc, toast, fmtDate, fmtCNPJ, maskCNPJ, isValidCNPJ, onlyDigits, isMissingColumn } from '../ui.js';
+import { esc, toast, fmtDate, fmtCNPJ, maskCNPJ, isValidCNPJ, onlyDigits, isMissingColumn, fmtCPF, maskCPF } from '../ui.js';
+import { localToday, normOrdinance, fiscalMissing, fiscalError, loadFiscalCpfs, saveFiscalCpf } from '../billing.js';
 import { icons } from '../icons.js';
 import { isAdmin } from '../auth.js';
 
@@ -11,12 +12,6 @@ let _entity = null;
 let _depts = [];
 let _contracts = [];   // fornecedores que vendem combustível (posto / ambos)
 let _search = '';
-
-// Data de hoje no fuso do usuário (toISOString usa UTC e vira o dia às 21h no Brasil)
-function localToday() {
-  const n = new Date();
-  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
-}
 
 const PRICE_LABEL = { fixo: 'Preço fixo por litro', desconto_bomba: 'Desconto sobre o preço da bomba' };
 
@@ -57,18 +52,29 @@ function stateCard(icon, title, text) {
 
 // false quando o banco ainda não tem a opção de numeração (versão anterior)
 let _hasNumbering = true;
+// false quando o banco ainda não tem CPF do fiscal e data da portaria (ajustes v2.1)
+let _hasFiscalDoc = true;
+const CONTRACT_COLS = 'id, kind, legal_name, trade_name, cnpj, department_id, contract_number, price_type, fiscal_name, fiscal_registration, fiscal_ordinance';
 
 async function loadAll() {
+  const cpfs = loadFiscalCpfs();
   let [e, d, s] = await Promise.all([
     supabase.from('entity').select('id, billing_start_date, billing_numbering').maybeSingle(),
     supabase.from('department')
       .select('id, acronym, name, cnpj, responsible_name, responsible_role')
       .order('acronym'),
     supabase.from('supplier')
-      .select('id, kind, legal_name, trade_name, cnpj, department_id, contract_number, price_type, fiscal_name, fiscal_registration, fiscal_ordinance')
+      .select(CONTRACT_COLS + ', fiscal_ordinance_date')
       .in('kind', ['posto', 'ambos'])
       .order('legal_name'),
   ]);
+  _hasFiscalDoc = true;
+  if (s.error && /fiscal_ordinance_date/.test(s.error.message || '')) {
+    _hasFiscalDoc = false;
+    s = await supabase.from('supplier').select(CONTRACT_COLS).in('kind', ['posto', 'ambos']).order('legal_name');
+  }
+  const c = await cpfs;
+  if (!c.available) _hasFiscalDoc = false;
   _hasNumbering = true;
   if (e.error && /billing_numbering/.test(e.error.message || '')) {
     _hasNumbering = false;
@@ -78,7 +84,7 @@ async function loadAll() {
   if (err) return isMissingColumn(err) ? 'missing' : 'error';
   _entity = e.data;
   _depts = d.data || [];
-  _contracts = s.data || [];
+  _contracts = (s.data || []).map(x => ({ ...x, fiscal_cpf: c.map.get(x.id) || null }));
   return 'ok';
 }
 
@@ -96,7 +102,10 @@ function contractMissing(c) {
   const m = [];
   if (!c.department_id) m.push('secretaria');
   if (!c.contract_number) m.push('nº do contrato');
-  if (!c.fiscal_name) m.push('fiscal');
+  if (!_hasFiscalDoc) { if (!c.fiscal_name) m.push('fiscal'); return m; }
+  if (!c.fiscal_name) { m.push('fiscal'); return m; }
+  fiscalMissing({ name: c.fiscal_name, cpf: c.fiscal_cpf, ordinance: c.fiscal_ordinance, ordinance_date: c.fiscal_ordinance_date })
+    .forEach(x => m.push(x));
   return m;
 }
 function computePending() {
@@ -140,7 +149,7 @@ function pendingHTML() {
   return `
     <div class="cfg-pending-head">
       <strong>${list.length} pendência(s)</strong>
-      <span>${blocks ? `${blocks} impede(m) o faturamento. As demais saem como "—" nos documentos.` : 'Nenhuma impede o faturamento, mas os campos vazios saem como "—" nos documentos.'}</span>
+      <span>${blocks ? `${blocks} impede(m) o faturamento. As demais saem como "—" nos documentos.` : 'Nenhuma impede a Ordem de Fornecimento, mas os campos vazios saem como "—" nos documentos.'}${_hasFiscalDoc ? ' O Termo de Recebimento exige fiscal com CPF e portaria.' : ''}</span>
     </div>
     <ul class="cfg-pending-list">
       ${list.map(p => `
@@ -199,7 +208,7 @@ function renderConfig() {
 
     <div class="card" id="cfg-depts">
       <h2 class="cfg-title">Secretarias</h2>
-      <p class="cfg-help">Cada secretaria é uma unidade gestora: tem CNPJ próprio e numeração própria de ordens. O responsável assina os documentos. São os mesmos campos do cadastro de Secretarias: o que for preenchido aqui aparece lá, e vice-versa.</p>
+      <p class="cfg-help">Cada secretaria é uma unidade gestora, com CNPJ próprio. O responsável assina os documentos. São os mesmos campos do cadastro de Secretarias: o que for preenchido aqui aparece lá, e vice-versa.</p>
       ${_depts.length ? _depts.map(deptRowHTML).join('') : `<p class="cfg-empty">Nenhuma secretaria cadastrada.</p>`}
     </div>
 
@@ -298,16 +307,28 @@ function contractRowHTML(c) {
           <input class="input" data-f="fiscal_name" maxlength="120"
                  value="${esc(c.fiscal_name || '')}" placeholder="Nome completo">
         </div>
+        ${_hasFiscalDoc ? `
         <div class="field">
-          <label class="field-label">Matrícula do fiscal</label>
+          <label class="field-label">CPF do fiscal</label>
+          <input class="input" data-f="fiscal_cpf" inputmode="numeric" maxlength="14" autocomplete="off"
+                 value="${esc(fmtCPF(c.fiscal_cpf || ''))}" placeholder="000.000.000-00">
+        </div>` : ''}
+        <div class="field">
+          <label class="field-label">Matrícula do fiscal (opcional)</label>
           <input class="input" data-f="fiscal_registration" maxlength="30"
                  value="${esc(c.fiscal_registration || '')}">
         </div>
         <div class="field">
-          <label class="field-label">Portaria de designação</label>
+          <label class="field-label">Portaria de designação nº</label>
           <input class="input" data-f="fiscal_ordinance" maxlength="60"
-                 value="${esc(c.fiscal_ordinance || '')}" placeholder="ex: Portaria nº 015/2026">
+                 value="${esc(_hasFiscalDoc ? normOrdinance(c.fiscal_ordinance) : (c.fiscal_ordinance || ''))}" placeholder="ex: 045/2026">
         </div>
+        ${_hasFiscalDoc ? `
+        <div class="field">
+          <label class="field-label">Data da portaria</label>
+          <input class="input" type="date" data-f="fiscal_ordinance_date" max="${localToday()}"
+                 value="${esc(c.fiscal_ordinance_date || '')}">
+        </div>` : ''}
       </div>
       ${rowFoot()}
     </div>`;
@@ -362,6 +383,7 @@ function bindConfig(body) {
     }
     if (!el.dataset?.f) return;
     if (el.dataset.f === 'cnpj') el.value = maskCNPJ(el.value);
+    if (el.dataset.f === 'fiscal_cpf') el.value = maskCPF(el.value);
     markDirty(el.closest('.cfg-row'));
   });
   body.addEventListener('change', (e) => {
@@ -419,7 +441,7 @@ function goTo(targetId) {
 function numberingNote(mode) {
   return mode === 'informado'
     ? 'Ao registrar a ordem, o usuário informa o número que ela recebeu no outro sistema. O Gerir Frota gera a relação de abastecimentos e o Termo de Recebimento com esse número. Número repetido na mesma secretaria é recusado.'
-    : 'Cada secretaria tem a sua sequência, que recomeça em 001 a cada ano. O número de uma ordem cancelada não é reaproveitado.';
+    : 'A sequência é única para todo o município e recomeça em 001 a cada ano: a ordem seguinte recebe o próximo número, seja de qual secretaria for. O número de uma ordem cancelada não é reaproveitado.';
 }
 
 function readRow(row) {
@@ -433,6 +455,7 @@ async function saveRow(row) {
   const id = row.dataset.id;
   const v = readRow(row);
   let table, payload, match;
+  let fiscalCpf;   // só contrato: gravado à parte, em supplier_fiscal_doc
 
   if (kind === 'general') {
     const date = v.billing_start_date || null;
@@ -465,8 +488,15 @@ async function saveRow(row) {
       price_type: v.price_type === 'desconto_bomba' ? 'desconto_bomba' : 'fixo',
       fiscal_name: v.fiscal_name || null,
       fiscal_registration: v.fiscal_registration || null,
-      fiscal_ordinance: v.fiscal_ordinance || null,
+      fiscal_ordinance: (_hasFiscalDoc ? normOrdinance(v.fiscal_ordinance) : v.fiscal_ordinance) || null,
     };
+    if (_hasFiscalDoc) {
+      payload.fiscal_ordinance_date = v.fiscal_ordinance_date || null;
+      fiscalCpf = onlyDigits(v.fiscal_cpf);
+      const fe = fiscalError({ name: payload.fiscal_name, cpf: fiscalCpf, registration: payload.fiscal_registration,
+                               ordinance: payload.fiscal_ordinance, ordinance_date: payload.fiscal_ordinance_date });
+      if (fe) { setStatus(row, fe, 'error'); return; }
+    }
   }
 
   const btn = row.querySelector('[data-save]');
@@ -481,6 +511,7 @@ async function saveRow(row) {
     const res = await Promise.race([req, timeout]);
     if (res.error) error = res.error;
     else if (!res.data?.length) error = { message: 'Registro não foi alterado. Verifique sua permissão.' };
+    else if (fiscalCpf !== undefined) error = await Promise.race([saveFiscalCpf(id, fiscalCpf), timeout]);
   } catch (e) {
     error = { message: e?.message || String(e) };
   }
@@ -494,7 +525,8 @@ async function saveRow(row) {
 
   // Estado local + pendências, sem redesenhar a página (mantém foco e rolagem)
   if (kind === 'general' || kind === 'numbering') Object.assign(_entity, payload);
-  else Object.assign((kind === 'dept' ? _depts : _contracts).find(x => x.id === id), payload);
+  else Object.assign((kind === 'dept' ? _depts : _contracts).find(x => x.id === id), payload,
+                     fiscalCpf !== undefined ? { fiscal_cpf: fiscalCpf || null } : {});
   row.classList.remove('is-dirty');
   delete row.dataset.unsaved;
   if (kind === 'dept') {

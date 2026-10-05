@@ -4,11 +4,11 @@
 // A tela calcula só para mostrar; quem calcula e grava é o banco.
 // =============================================================================
 import { supabase } from '../supabase.js';
-import { esc, toast, fmtDate, openModal, closeModal } from '../ui.js';
+import { esc, toast, fmtDate, openModal, closeModal, fmtCPF, maskCPF, isValidCPF, onlyDigits } from '../ui.js';
 import { icons } from '../icons.js';
 import {
   fmtLiters, fmtPrice, fmtInt, fmtAmount, fmtCents, localToday, billingError, withTimeout,
-  priceToMilli, toCenti, amountCents, TERM_STATUS,
+  priceToMilli, toCenti, amountCents, TERM_STATUS, normOrdinance,
 } from '../billing.js';
 import { printReceiptTerm } from '../billing_docs.js';
 
@@ -47,8 +47,10 @@ export async function openTermModal(order, onDone) {
   const body = m.querySelector('#trm-body');
 
   let items, sup, fuels, lines;
+  // false quando o banco ainda não tem CPF do fiscal e data da portaria (ajustes v2.1)
+  let hasFiscalDoc = true;
   try {
-    const [i, s, f, l] = await withTimeout(Promise.all([
+    const [i, s, f, l, fd, od] = await withTimeout(Promise.all([
       supabase.from('supply_order_item')
         .select('id, fuel_type_code, fuel_subtype_id, fuel_label, fuelings_count, liters')
         .eq('supply_order_id', order.id),
@@ -59,9 +61,16 @@ export async function openTermModal(order, onDone) {
         .select('fuel_type_code, fuel_subtype_id, unit_price')
         .eq('supplier_id', order.supplier_id),
       supabase.rpc('supply_order_fuelings', { p_order: order.id }),
+      supabase.from('supplier_fiscal_doc').select('cpf').eq('supplier_id', order.supplier_id).maybeSingle(),
+      supabase.from('supplier').select('fiscal_ordinance_date').eq('id', order.supplier_id).maybeSingle(),
     ]));
     const err = i.error || s.error || f.error || l.error;
     if (err) throw err;
+    if (fd.error || od.error) hasFiscalDoc = false;
+    else if (s.data) {
+      s.data.fiscal_cpf = fd.data?.cpf || '';
+      s.data.fiscal_ordinance_date = od.data?.fiscal_ordinance_date || '';
+    }
     items = [...(i.data || [])].sort((a, b) => String(a.fuel_label).localeCompare(String(b.fuel_label)));
     sup = s.data || {}; fuels = f.data || []; lines = l.data || [];
   } catch (e) {
@@ -172,11 +181,30 @@ export async function openTermModal(order, onDone) {
           <label class="field-label" for="trm-fiscal-reg">Matrícula</label>
           <input class="input" id="trm-fiscal-reg" maxlength="30" value="${esc(sup.fiscal_registration || '')}">
         </div>
+        ${hasFiscalDoc ? `
+        <div class="field">
+          <label class="field-label" for="trm-fiscal-cpf">CPF <span class="req">*</span></label>
+          <input class="input" id="trm-fiscal-cpf" inputmode="numeric" maxlength="14" autocomplete="off"
+                 value="${esc(fmtCPF(sup.fiscal_cpf || ''))}" placeholder="000.000.000-00">
+          <span class="field-error" id="trm-fiscal-cpf-err"></span>
+        </div>
+        <div class="field">
+          <label class="field-label" for="trm-fiscal-ord">Portaria nº <span class="req">*</span></label>
+          <input class="input" id="trm-fiscal-ord" maxlength="60" value="${esc(normOrdinance(sup.fiscal_ordinance))}" placeholder="ex: 045/2026">
+        </div>
+        <div class="field">
+          <label class="field-label" for="trm-fiscal-orddate">Data da portaria <span class="req">*</span></label>
+          <input class="input" type="date" id="trm-fiscal-orddate" max="${today}" value="${esc(sup.fiscal_ordinance_date || '')}">
+          <span class="field-error" id="trm-fiscal-orddate-err"></span>
+        </div>
+        <div class="field trm-col-3">
+          <span class="field-help">No termo sai a matrícula; sem matrícula, o CPF com parte dos números oculta. ${sup.fiscal_name && sup.fiscal_cpf ? '' : 'Para vir preenchido nos próximos termos, cadastre o fiscal no contrato (Faturamento › Configuração).'}</span>
+        </div>` : `
         <div class="field trm-col-3">
           <label class="field-label" for="trm-fiscal-ord">Portaria de designação</label>
           <input class="input" id="trm-fiscal-ord" maxlength="150" value="${esc(sup.fiscal_ordinance || '')}" placeholder="ex: Portaria nº 015/2026">
           ${sup.fiscal_name ? '' : '<span class="field-help">Para vir preenchido nos próximos termos, cadastre o fiscal no contrato (Faturamento › Configuração).</span>'}
-        </div>
+        </div>`}
       </div>
 
       <div class="trm-missing" id="trm-missing"></div>
@@ -230,6 +258,19 @@ export async function openTermModal(order, onDone) {
     if (!val('trm-commitment')) missing.push('empenho');
     items.forEach(it => { if (!prices[it.id]) missing.push(`preço de ${it.fuel_label}`); });
     if (!val('trm-fiscal')) missing.push('nome do fiscal');
+    let fiscalErr = false;
+    if (hasFiscalDoc) {
+      const cpf = onlyDigits(val('trm-fiscal-cpf')), ordDate = val('trm-fiscal-orddate');
+      let cpfErr = '', ordErr = '';
+      if (!cpf) missing.push('CPF do fiscal');
+      else if (cpf.length === 11 && !isValidCPF(cpf)) cpfErr = 'CPF inválido. Confira os números.';
+      else if (cpf.length !== 11) missing.push('CPF do fiscal');
+      if (!normOrdinance(val('trm-fiscal-ord'))) missing.push('nº da portaria');
+      if (!ordDate) missing.push('data da portaria');
+      else if (ordDate > today) ordErr = 'Não pode ser futura.';
+      setFieldError('trm-fiscal-cpf', cpfErr); setFieldError('trm-fiscal-orddate', ordErr);
+      fiscalErr = !!(cpfErr || ordErr);
+    }
 
     // Conferência com o valor da nota
     const nfRaw = val('trm-nfamount');
@@ -263,12 +304,13 @@ export async function openTermModal(order, onDone) {
     if (!needConfirm) confirmDiff = false;
     $('trm-nfamount').classList.toggle('is-invalid', nfAmountErr);
 
-    const blocked = missing.length || nfErr || issueErr || nfAmountErr || (needConfirm && !confirmDiff);
+    const blocked = missing.length || nfErr || issueErr || fiscalErr || nfAmountErr || (needConfirm && !confirmDiff);
     emitBtn.disabled = !!blocked;
     const box = $('trm-missing');
     if (missing.length) box.textContent = 'Falta informar: ' + missing.join(', ') + '.';
     else if (nfAmountErr) box.textContent = 'O valor da nota fiscal deve ser maior que zero.';
     else if (nfErr || issueErr) box.textContent = 'Corrija as datas destacadas.';
+    else if (fiscalErr) box.textContent = 'Corrija os dados do fiscal destacados.';
     else if (needConfirm && !confirmDiff) box.textContent = 'Confirme a emissão com a diferença ou corrija os preços.';
     else box.textContent = '';
     return { total, prices };
@@ -277,6 +319,7 @@ export async function openTermModal(order, onDone) {
   const form = $('trm-form');
   form.addEventListener('input', (e) => {
     if (e.target.id === 'trm-confirm') return;
+    if (e.target.id === 'trm-fiscal-cpf') e.target.value = maskCPF(e.target.value);
     // mudou preço ou valor da nota: a diferença é outra, a confirmação anterior não vale
     if (e.target.id === 'trm-nfamount' || e.target.dataset.price) confirmDiff = false;
     refresh();
@@ -310,6 +353,10 @@ export async function openTermModal(order, onDone) {
         p_commitment: val('trm-commitment'),
         p_fiscal_registration: val('trm-fiscal-reg') || null,
         p_fiscal_ordinance: val('trm-fiscal-ord') || null,
+        ...(hasFiscalDoc ? {
+          p_fiscal_cpf: onlyDigits(val('trm-fiscal-cpf')),
+          p_fiscal_ordinance_date: val('trm-fiscal-orddate'),
+        } : {}),
       }), 30000);
     } catch (e) { res = { error: e }; }
     if (!m.isConnected) { if (!res.error) onDone?.(); return; }

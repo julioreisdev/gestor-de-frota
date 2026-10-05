@@ -1,4 +1,6 @@
 // Utilitários comuns do faturamento (Ordem de Fornecimento e Termo de Recebimento).
+import { supabase } from './supabase.js';
+import { fmtDate, onlyDigits, isValidCPF } from './ui.js';
 
 /** Data de hoje no fuso do usuário (toISOString usa UTC e vira o dia às 21h no Brasil). */
 export function localToday() {
@@ -62,6 +64,67 @@ export function amountCents(liters, priceMilli) {
   return Number((BigInt(l) * BigInt(priceMilli) + 500n) / 1000n);
 }
 export const fmtCents = (c) => fmtAmount((c || 0) / 100);
+
+// ---- Fiscal do contrato ----
+// Nome, CPF e portaria (número e data) são obrigatórios; matrícula é opcional.
+// O CPF fica em tabela à parte (supplier_fiscal_doc), que o posto não lê.
+
+/** Só o número da portaria: tira um "Portaria nº" digitado junto. */
+export const normOrdinance = (s) => String(s || '').trim().replace(/^portaria\s*(n[ºo°.]*)?\s*/i, '').trim();
+
+/** "Portaria nº 045/2026, de 02/01/2026" (sem a data, quando o registro é antigo). */
+export function fmtOrdinance(number, date) {
+  const n = normOrdinance(number);
+  if (!n) return '';
+  return `Portaria nº ${n}${date ? ', de ' + fmtDate(date) : ''}`;
+}
+
+/** O que falta no fiscal: lista de textos. Vazia = completo. */
+export function fiscalMissing({ name, cpf, ordinance, ordinance_date }) {
+  const m = [];
+  if (!String(name || '').trim()) m.push('nome do fiscal');
+  if (!onlyDigits(cpf)) m.push('CPF do fiscal');
+  if (!normOrdinance(ordinance)) m.push('nº da portaria');
+  if (!ordinance_date) m.push('data da portaria');
+  return m;
+}
+/** Erro de preenchimento do fiscal, ou ''. Fiscal todo em branco é aceito (required = false). */
+export function fiscalError(f, { required = false } = {}) {
+  const any = [f.name, f.cpf, f.registration, f.ordinance, f.ordinance_date].some(v => String(v || '').trim());
+  if (!any && !required) return '';
+  const miss = fiscalMissing(f);
+  if (miss.length) return `Fiscal do contrato: falta ${miss.join(', ')}.`;
+  if (!isValidCPF(f.cpf)) return 'CPF do fiscal inválido. Confira os números.';
+  if (f.ordinance_date > localToday()) return 'A data da portaria não pode ser futura.';
+  return '';
+}
+
+/** CPF dos fiscais por contrato: Map(supplier_id → cpf). available = false quando
+ *  o banco ainda não tem a tabela (versão anterior): as telas seguem sem o campo. */
+export async function loadFiscalCpfs() {
+  try {
+    const r = await supabase.from('supplier_fiscal_doc').select('supplier_id, cpf');
+    if (r.error) return { map: new Map(), available: false };
+    return { map: new Map((r.data || []).map(x => [x.supplier_id, x.cpf])), available: true };
+  } catch { return { map: new Map(), available: false }; }
+}
+/** Grava (ou apaga, se vazio) o CPF do fiscal do contrato. Devolve o erro, se houver. */
+export async function saveFiscalCpf(supplierId, cpf) {
+  const d = onlyDigits(cpf);
+  const r = d
+    ? await supabase.from('supplier_fiscal_doc').upsert({ supplier_id: supplierId, cpf: d, updated_at: new Date().toISOString() }, { onConflict: 'supplier_id' })
+    : await supabase.from('supplier_fiscal_doc').delete().eq('supplier_id', supplierId);
+  return r.error || null;
+}
+
+// ---- Busca pelo número da nota fiscal ----
+/** Só os dígitos, sem zeros à esquerda: "4.512" e "004512" viram "4512". */
+export const nfDigits = (s) => onlyDigits(s).replace(/^0+/, '');
+/** A nota bate com o que foi digitado? Compara só dígitos e aceita parte do número. */
+export function nfMatches(invoiceNumber, query) {
+  const q = nfDigits(query);
+  return !!q && nfDigits(invoiceNumber).includes(q);
+}
 
 // ---- Valor faturado ----
 // Depois do Termo de Recebimento, o abastecimento vale o valor do termo (já com

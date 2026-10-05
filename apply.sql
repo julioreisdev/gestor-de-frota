@@ -223,8 +223,9 @@ create policy p_maint_supplier_upd on maintenance for update
 -- =============================================================================
 -- 15) FATURAMENTO — Parte 2: Ordem de Fornecimento (OF)
 --   A OF consolida os abastecimentos de UM contrato (cadastro de fornecedor)
---   em um período. Só tem quantidades. Numeração NNN/AAAA por secretaria e
---   exercício. Depois de emitida, os abastecimentos ficam travados.
+--   em um período. Só tem quantidades. Numeração NNN/AAAA em sequência única
+--   do município por exercício (a secretaria não entra na contagem).
+--   Depois de emitida, os abastecimentos ficam travados.
 --   Toda escrita passa pelas funções abaixo (tabelas só têm política de leitura).
 -- Idempotente.
 -- =============================================================================
@@ -240,7 +241,7 @@ create table if not exists supply_order (
   department_id uuid not null references department(id),
   supplier_id   uuid not null references supplier(id),      -- = contrato
   year smallint not null,                                   -- exercício da numeração
-  seq  integer  not null,                                   -- sequencial na secretaria/exercício
+  seq  integer,                                             -- sequencial do município no exercício (nulo = nº informado)
   number text not null,                                     -- '008/2026'
   reference_month char(7) not null,                         -- competência 'MM/AAAA'
   period_start date not null,
@@ -268,7 +269,6 @@ create table if not exists supply_order (
   created_by uuid references app_user(id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint uq_supply_order_seq unique (department_id, year, seq),
   constraint chk_so_period check (period_end >= period_start),
   constraint chk_so_cancel check (status <> 'cancelada' or cancel_reason is not null)
 );
@@ -284,6 +284,14 @@ alter table supply_order add constraint chk_so_seq check (external_number or seq
 -- O mesmo número não se repete na secretaria e no exercício entre ordens ativas
 create unique index if not exists ux_supply_order_number_active
   on supply_order (department_id, year, upper(btrim(number))) where status <> 'cancelada';
+-- Numeração geral: a sequência é do município, e não de cada secretaria.
+alter table supply_order drop constraint if exists uq_supply_order_seq;
+do $$ begin
+  if exists (select 1 from supply_order where seq is not null group by year, seq having count(*) > 1) then
+    raise exception 'Há Ordens de Fornecimento com o mesmo número em secretarias diferentes (numeração antiga, por secretaria). Rode antes o limpeza_testes_faturamento.sql, que apaga as ordens e os termos de teste, e depois rode este arquivo de novo.';
+  end if;
+end $$;
+create unique index if not exists ux_supply_order_year_seq on supply_order (year, seq);
 create index if not exists ix_supply_order_department on supply_order (department_id, year);
 
 create table if not exists supply_order_item (               -- um por combustível (tipo + subtipo)
@@ -620,9 +628,9 @@ begin
   v_n := coalesce(array_length(v_ids, 1), 0);
   if v_n = 0 then raise exception 'Selecione pelo menos um abastecimento.'; end if;
 
-  -- Numeração: uma emissão por vez na secretaria/exercício
+  -- Numeração: uma emissão por vez no município/exercício
   v_year := extract(year from p_end)::smallint;
-  perform pg_advisory_xact_lock(hashtext('supply_order_' || v_sup.department_id::text || '_' || v_year::text));
+  perform pg_advisory_xact_lock(hashtext('supply_order_' || v_year::text));
 
   -- Trava as linhas e revalida: se outra emissão levou algum, esta falha inteira
   perform 1 from fueling where id = any(v_ids) order by id for update;
@@ -656,12 +664,13 @@ begin
     v_seq := null;
     v_number := v_ext;
   else
+    -- Sequência única do município no exercício: a secretaria não entra na contagem
     select coalesce(max(seq), 0) + 1 into v_seq
-      from supply_order where department_id = v_sup.department_id and year = v_year;
+      from supply_order where year = v_year;
     loop   -- pula número que já tenha sido informado à mão (cidade que trocou de modo)
       v_number := lpad(v_seq::text, greatest(3, length(v_seq::text)), '0') || '/' || v_year::text;
       exit when not exists (select 1 from supply_order o
-                             where o.department_id = v_sup.department_id and o.year = v_year
+                             where o.year = v_year
                                and upper(btrim(o.number)) = v_number);
       v_seq := v_seq + 1;
     end loop;
@@ -895,6 +904,10 @@ create table if not exists receipt_term (
   created_at timestamptz not null default now(),
   constraint chk_rt_cancel check (status <> 'cancelado' or cancel_reason is not null)
 );
+-- Cópia do fiscal no dia do termo: CPF (impresso mascarado, só quando não há
+-- matrícula) e data da portaria. fiscal_ordinance guarda o número da portaria.
+alter table receipt_term add column if not exists fiscal_cpf char(11);
+alter table receipt_term add column if not exists fiscal_ordinance_date date;
 -- no máximo 1 termo ativo por OF
 create unique index if not exists ux_receipt_term_active on receipt_term (supply_order_id) where status = 'emitido';
 create index if not exists ix_receipt_term_order on receipt_term (supply_order_id);
@@ -951,6 +964,8 @@ create policy p_rtf_read on receipt_term_fueling for select
 -- Funções
 -- ----------------------------------------------------------------------------
 -- Emite o termo. p_prices: {"<id do item da OF>": preço por litro, ...}
+-- Fiscal: nome, CPF e portaria (número e data) são obrigatórios; matrícula é opcional.
+drop function if exists emit_receipt_term(uuid, text, date, jsonb, text, text, numeric, date, text, text, text);
 create or replace function emit_receipt_term(
   p_order uuid,
   p_invoice_number text,
@@ -962,7 +977,9 @@ create or replace function emit_receipt_term(
   p_issue_date date default null,
   p_commitment text default null,
   p_fiscal_registration text default null,
-  p_fiscal_ordinance text default null
+  p_fiscal_ordinance text default null,
+  p_fiscal_cpf text default null,
+  p_fiscal_ordinance_date date default null
 ) returns uuid
 language plpgsql security definer set search_path = public, auth as $$
 declare
@@ -972,6 +989,9 @@ declare
   v_series text := nullif(btrim(coalesce(p_invoice_series, '')), '');
   v_fiscal text := nullif(btrim(coalesce(p_fiscal_name, '')), '');
   v_commit text := nullif(btrim(coalesce(p_commitment, '')), '');
+  v_cpf text := regexp_replace(coalesce(p_fiscal_cpf, ''), '\D', '', 'g');
+  -- só o número: tira um "Portaria nº" digitado junto
+  v_ord text := nullif(btrim(regexp_replace(coalesce(p_fiscal_ordinance, ''), '^\s*portaria\s*(n[ºo°.]*)?\s*', '', 'i')), '');
   v_bad text; v_id uuid; v_total numeric(14,2); v_n integer;
 begin
   select * into v_o from supply_order where id = p_order for update;
@@ -996,6 +1016,11 @@ begin
     raise exception 'A data do termo não pode ser anterior à emissão da ordem (%).', to_char(v_o.issue_date, 'DD/MM/YYYY');
   end if;
   if v_fiscal is null then raise exception 'Informe o fiscal do contrato.'; end if;
+  if v_cpf = '' then raise exception 'Informe o CPF do fiscal do contrato.'; end if;
+  if not is_valid_cpf(v_cpf) then raise exception 'CPF do fiscal inválido.'; end if;
+  if v_ord is null then raise exception 'Informe o número da portaria do fiscal.'; end if;
+  if p_fiscal_ordinance_date is null then raise exception 'Informe a data da portaria do fiscal.'; end if;
+  if p_fiscal_ordinance_date > current_date then raise exception 'A data da portaria não pode ser futura.'; end if;
   if p_invoice_amount is not null and p_invoice_amount <= 0 then
     raise exception 'O valor da nota fiscal deve ser maior que zero.';
   end if;
@@ -1021,12 +1046,13 @@ begin
   insert into receipt_term (
     supply_order_id, number, invoice_number, invoice_series, invoice_date, invoice_amount,
     issue_date, commitment_number, fiscal_name, fiscal_registration, fiscal_ordinance,
+    fiscal_cpf, fiscal_ordinance_date,
     responsible_name_snapshot, responsible_role_snapshot, total_amount, created_by
   ) values (
     p_order, v_o.number, v_nf, v_series, p_invoice_date, p_invoice_amount,
     v_issue, v_commit, v_fiscal,
     nullif(btrim(coalesce(p_fiscal_registration, '')), ''),
-    nullif(btrim(coalesce(p_fiscal_ordinance, '')), ''),
+    v_ord, v_cpf, p_fiscal_ordinance_date,
     coalesce(v_dep.responsible_name, v_o.responsible_name_snapshot),
     coalesce(v_dep.responsible_role, v_o.responsible_role_snapshot),
     v_total, auth.uid()
@@ -1097,8 +1123,8 @@ begin
   return v_id;
 end;
 $$;
-revoke all on function emit_receipt_term(uuid, text, date, jsonb, text, text, numeric, date, text, text, text) from public;
-grant execute on function emit_receipt_term(uuid, text, date, jsonb, text, text, numeric, date, text, text, text) to authenticated;
+revoke all on function emit_receipt_term(uuid, text, date, jsonb, text, text, numeric, date, text, text, text, text, date) from public;
+grant execute on function emit_receipt_term(uuid, text, date, jsonb, text, text, numeric, date, text, text, text, text, date) to authenticated;
 
 -- Cancela o termo: restaura o preço dos abastecimentos e a OF volta a Emitida.
 create or replace function cancel_receipt_term(p_term uuid, p_reason text) returns void
@@ -1563,6 +1589,66 @@ drop trigger if exists trg_maintenance_set_driver on maintenance;
 create trigger trg_maintenance_set_driver
   before insert or update on maintenance
   for each row execute function maintenance_set_driver();
+
+-- =============================================================================
+-- 20) AJUSTES v2.1 (out/2026), pedidos pelo cliente depois dos testes
+--   a) Fiscal do contrato: CPF obrigatório (matrícula opcional) e portaria com
+--      número e data. O CPF fica em tabela à parte, que o posto não lê.
+--   b) Autorização e abastecimento não aceitam data futura.
+--   (A numeração geral da ordem e os campos novos do termo estão nos blocos 15
+--    e 17, junto das funções que eles alteram.)
+-- Idempotente.
+-- =============================================================================
+
+-- a) Fiscal do contrato
+alter table supplier add column if not exists fiscal_ordinance_date date;   -- fiscal_ordinance passa a ser só o número
+
+create table if not exists supplier_fiscal_doc (
+  supplier_id uuid primary key references supplier(id) on delete cascade,
+  cpf char(11) not null,
+  updated_at timestamptz not null default now(),
+  constraint chk_supplier_fiscal_cpf check (is_valid_cpf(cpf))
+);
+grant select, insert, update, delete on supplier_fiscal_doc to authenticated;
+alter table supplier_fiscal_doc enable row level security;
+
+-- Lê quem enxerga o contrato, menos o posto. Só o admin grava (como no fornecedor).
+drop policy if exists p_sfd_read on supplier_fiscal_doc;
+create policy p_sfd_read on supplier_fiscal_doc for select
+  using (
+    current_user_role() in ('admin','usuario')
+    and exists (select 1 from supplier s where s.id = supplier_fiscal_doc.supplier_id)
+  );
+drop policy if exists p_sfd_admin_write on supplier_fiscal_doc;
+create policy p_sfd_admin_write on supplier_fiscal_doc for all
+  using (current_user_role() = 'admin') with check (current_user_role() = 'admin');
+
+-- b) Sem data futura. "Hoje" é a data no fuso do Piauí, e não a do aparelho do
+--    usuário. Vale ao incluir e ao trocar a data; registro antigo com data
+--    futura continua podendo ser cancelado ou corrigido.
+create or replace function local_today() returns date
+language sql stable as $$
+  select (now() at time zone 'America/Fortaleza')::date
+$$;
+grant execute on function local_today() to authenticated;
+
+create or replace function block_future_date() returns trigger
+language plpgsql as $$
+begin
+  if (tg_op = 'INSERT' or new.date is distinct from old.date) and new.date > local_today() then
+    raise exception 'A data do abastecimento não pode ser posterior a hoje.' using errcode = 'P0001';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_auth_block_future_date on fueling_authorization;
+create trigger trg_auth_block_future_date
+  before insert or update of date on fueling_authorization
+  for each row execute function block_future_date();
+drop trigger if exists trg_fueling_block_future_date on fueling;
+create trigger trg_fueling_block_future_date
+  before insert or update of date on fueling
+  for each row execute function block_future_date();
 
 -- Reload do schema cache do PostgREST
 notify pgrst, 'reload schema';

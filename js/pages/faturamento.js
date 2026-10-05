@@ -1,8 +1,8 @@
 // =============================================================================
 // FATURAMENTO — Ordem de Fornecimento e Termo de Recebimento (combustível)
 // Entrada da página: abas conforme o perfil.
-//   admin      → Ordens · Nova ordem · Configuração
-//   usuario    → Ordens · Nova ordem
+//   admin      → Ordens · Termos · Nova ordem · Configuração
+//   usuario    → Ordens · Termos · Nova ordem
 //   fornecedor → Ordens (só leitura)
 // =============================================================================
 import { pageRoot, pageHeader } from '../shell.js';
@@ -10,10 +10,12 @@ import { icons } from '../icons.js';
 import { getProfile } from '../auth.js';
 import { renderOrdersTab } from './faturamento_ordens.js';
 import { renderNewOrderTab } from './faturamento_nova.js';
+import { renderTermsTab } from './faturamento_termos.js';
 import { renderConfigTab } from './faturamento_config.js';
 
 const TABS = {
   orders: { label: 'Ordens de Fornecimento', icon: 'receipt', render: renderOrdersTab },
+  terms:  { label: 'Termos de Recebimento',  icon: 'fileCheck', render: renderTermsTab },
   new:    { label: 'Nova ordem',             icon: 'plus',    render: renderNewOrderTab },
   config: { label: 'Configuração',           icon: 'shield',  render: renderConfigTab },
 };
@@ -31,8 +33,8 @@ document.addEventListener('click', (e) => {
 
 function allowedTabs() {
   const role = getProfile()?.role;
-  if (role === 'admin') return ['orders', 'new', 'config'];
-  if (role === 'usuario') return ['orders', 'new'];
+  if (role === 'admin') return ['orders', 'terms', 'new', 'config'];
+  if (role === 'usuario') return ['orders', 'terms', 'new'];
   return ['orders'];
 }
 

@@ -5,7 +5,9 @@ import { icons } from '../icons.js';
 import Chart from 'https://esm.sh/chart.js@4.4.1/auto';
 import * as XLSX from 'https://esm.sh/xlsx@0.18.5';
 import { openPrintTab } from '../thermal.js';
-import { queryFuelings } from '../billing.js';
+import { queryFuelings, localToday, loadFiscalCpfs, withTimeout } from '../billing.js';
+import { isAdmin } from '../auth.js';
+import { buildConference, conferenceHTML } from '../conference_annex.js';
 
 // =============================================================================
 // ESTADO
@@ -75,7 +77,7 @@ async function loadAll() {
       date, quantity, unit_price, total, km_initial, km_final,
       responsible_name, authorization_id,
       vehicle_plate_snapshot, department_acronym_snapshot, supplier_trade_name_snapshot,
-      authorization:authorization_id(number)${extra}
+      authorization:authorization_id(number, date)${extra}
     `).is('deleted_at', null)),
     supabase.from('maintenance').select(`
       id, vehicle_id, supplier_id, kind, status, open_date, close_date,
@@ -1231,8 +1233,46 @@ async function exportPDF() {
     ? `<h2 class="section">💰 Totalizações de Abastecimento</h2>${totalsBlockHTML(computeAbastTotals(absList), { pdf: true })}`
     : '';
 
-  const html = pdfTemplate({ orgao, logo, ibge, period, entity_type: entity?.entity_type, body: kpisHTML + sectionsHTML + totalsHTML });
+  // Anexo de conferência: só para o administrador, depois de tudo. O corpo do relatório não o cita.
+  const annexHTML = isAdmin() ? await conferenceAnnexHTML(period) : '';
+
+  const html = pdfTemplate({ orgao, logo, ibge, period, entity_type: entity?.entity_type, body: kpisHTML + sectionsHTML + totalsHTML + annexHTML });
   openPrintTab(html, { title: 'Relatório Gerencial' });
+}
+
+/** Busca o que o anexo precisa além do que a tela já tem. Falhou a busca: o
+ *  relatório sai sem o anexo (a pendência sem dado fica "não avaliada"). */
+async function conferenceAnnexHTML(period) {
+  try {
+    const today = localToday();
+    const [ord, fis, cpfs, fut] = await withTimeout(Promise.all([
+      supabase.from('supply_order')
+        .select('id, number, status, department_id, department_acronym_snapshot, supplier_name_snapshot, contract_number_snapshot, commitment_number, total_liters, period_start, period_end')
+        .neq('status', 'cancelada'),
+      supabase.from('supplier').select('id, fiscal_name, fiscal_ordinance, fiscal_ordinance_date'),
+      loadFiscalCpfs(),
+      supabase.from('fueling_authorization')
+        .select('id, number, date, status, authorized_quantity, fuel_type_code, fuel_subtype_id, vehicle_plate_snapshot, department_acronym_snapshot, vehicle_id')
+        .gt('date', today).neq('status', 'cancelada').order('date'),
+    ]), 20000);
+    const hasFiscalDoc = !fis.error && cpfs.available;
+    const fiscal = new Map((fis.data || []).map(x => [x.id, x]));
+    const suppliers = _suppliers.map(s => ({ ...s, ...(fiscal.get(s.id) || {}), fiscal_cpf: cpfs.map.get(s.id) || null }));
+    const orders = ord.error ? null : (ord.data || []).filter(o =>
+      (!_filter.from || o.period_end >= _filter.from) && (!_filter.to || o.period_start <= _filter.to)
+      && (!_filter.dept || o.department_id === _filter.dept));
+    const futureAuths = (fut.data || []).filter(a => !_filter.dept || _vehicles.find(v => v.id === a.vehicle_id)?.department_id === _filter.dept);
+    const fuelLabel = (a) => _fuelSubs.find(s => s.id === a.fuel_subtype_id)?.description
+      || _fuels.find(f => f.code === a.fuel_type_code)?.description || '—';
+    const conf = buildConference({
+      fuelings: filteredFueling(), vehicles: _vehicles, suppliers, orders, futureAuths, today, fuelLabel,
+      hasBilling: _hasBilling, hasFiscalDoc,
+    });
+    return conferenceHTML(conf, { period, generatedAt: new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) });
+  } catch (e) {
+    console.warn('anexo de conferência', e);
+    return '';
+  }
 }
 
 function pdfTemplate({ orgao, logo, ibge, period, entity_type, body }) {

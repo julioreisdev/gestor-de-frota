@@ -1,11 +1,13 @@
 // Shell autenticado: sidebar + topbar + breadcrumb + area de conteúdo.
 import { icons, iconSpan } from './icons.js';
 import { logout, getProfile } from './auth.js';
-import { APP_NAME, APP_FAVICON } from './config.js';
+import { APP_NAME } from './config.js';
 import { navigate, currentPath } from './router.js';
 import { esc, confirmDialog } from './ui.js';
 import { supabase } from './supabase.js';
 import { canInstall, install, onInstallStateChange } from './pwa.js';
+
+const APP_ICON = 'assets/icons/icon-192.png';
 
 // Catálogo de páginas — único lugar onde definir nav + permissões + breadcrumb
 export const NAV = [
@@ -110,7 +112,8 @@ export async function renderShell() {
       </a>`;
   }).join('');
 
-  const logoHTML = `<img src="${APP_FAVICON}" alt="${esc(APP_NAME)}">`;
+  // Em tamanho pequeno entra o símbolo (ícone do app); a logo completa fica no login e nos impressos
+  const logoHTML = `<img src="${APP_ICON}" alt="${esc(APP_NAME)}">`;
 
   root.innerHTML = `
     <div class="app" id="app-shell">
@@ -143,7 +146,7 @@ export async function renderShell() {
             ${icons.download}
             <span>Instalar app</span>
           </button>
-          <img class="topbar-logo" src="${APP_FAVICON}" alt="${esc(APP_NAME)}">
+          <img class="topbar-logo" src="${APP_ICON}" alt="${esc(APP_NAME)}">
         </header>
         <main class="page" id="page-content">
           <div class="card">

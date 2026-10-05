@@ -3,7 +3,7 @@
 // o app em telas onde a sessão Supabase ainda está em cache). Nada de cachear
 // rotas dinâmicas ou queries — evita servir dado velho.
 
-const VERSION = 'gf-v1';
+const VERSION = 'gf-v2';
 const APP_SHELL = [
   './',
   './index.html',

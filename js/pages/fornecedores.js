@@ -5,6 +5,8 @@ import { icons } from '../icons.js';
 import { printList, buildFiltersLabel } from '../print.js';
 import { exportXLSX, timestampFilename } from '../export.js';
 import { isAdmin } from '../auth.js';
+import { fmtCPF, maskCPF } from '../ui.js';
+import { localToday, normOrdinance, fiscalError, loadFiscalCpfs, saveFiscalCpf } from '../billing.js';
 
 const KIND_LABEL = { posto: 'Posto', mecanica: 'Mecânica', ambos: 'Posto + Mecânica' };
 const KIND_BADGE = { posto: 'badge', mecanica: 'badge badge-warning', ambos: 'badge badge-success' };
@@ -153,20 +155,32 @@ const SUPPLIER_COLS = `
       department:department_id(acronym, name),
       fuels:supplier_fuel(id, fuel_type_code, fuel_subtype_id, unit_price, contract_amount, current_balance)`;
 const SUPPLIER_BILLING_COLS = ', price_type, fiscal_name, fiscal_registration, fiscal_ordinance';
+// false quando o banco ainda não tem CPF do fiscal e data da portaria (ajustes v2.1)
+let _hasFiscalDoc = true;
+let _fiscalCpf = new Map();   // supplier_id → CPF do fiscal
 
 async function loadAll() {
+  const cpfs = isAdmin() ? loadFiscalCpfs() : Promise.resolve({ map: new Map(), available: false });
   let [s, d, m, f, fs] = await Promise.all([
-    supabase.from('supplier').select(SUPPLIER_COLS + SUPPLIER_BILLING_COLS).order('legal_name'),
+    supabase.from('supplier').select(SUPPLIER_COLS + SUPPLIER_BILLING_COLS + ', fiscal_ordinance_date').order('legal_name'),
     supabase.from('department').select('id, acronym, name').order('acronym'),
     supabase.from('ibge_municipality').select('code, name').order('name'),
     supabase.from('fuel_type').select('code, description').order('code'),
     supabase.from('fuel_subtype').select('id, fuel_type_code, description, active').eq('active', true).order('description'),
   ]);
   _hasBillingCols = true;
+  _hasFiscalDoc = true;
+  if (s.error && isMissingColumn(s.error)) {
+    _hasFiscalDoc = false;
+    s = await supabase.from('supplier').select(SUPPLIER_COLS + SUPPLIER_BILLING_COLS).order('legal_name');
+  }
   if (s.error && isMissingColumn(s.error)) {
     _hasBillingCols = false;
     s = await supabase.from('supplier').select(SUPPLIER_COLS).order('legal_name');
   }
+  const c = await cpfs;
+  if (!c.available) _hasFiscalDoc = false;
+  _fiscalCpf = c.map;
   if (s.error) { toast('Falha ao carregar fornecedores: ' + s.error.message, 'error'); _items = []; }
   else _items = s.data || [];
   _depts = d.data || [];
@@ -526,17 +540,29 @@ function openForModal(id) {
           <label class="field-label">Fiscal do contrato</label>
           <input class="input" name="fiscal_name" maxlength="120" value="${esc(s?.fiscal_name || '')}"
                  placeholder="Nome completo do fiscal">
-          <span class="field-help">Assina o Termo de Recebimento.</span>
+          <span class="field-help">Assina o Termo de Recebimento.${_hasFiscalDoc ? ' Informado o fiscal, CPF e portaria (número e data) são obrigatórios.' : ''}</span>
         </div>
+        ${_hasFiscalDoc ? `
         <div class="field" data-billing-field style="display:${kind === 'mecanica' ? 'none' : ''}">
-          <label class="field-label">Matrícula do fiscal</label>
+          <label class="field-label">CPF do fiscal</label>
+          <input class="input" name="fiscal_cpf" inputmode="numeric" maxlength="14" autocomplete="off"
+                 value="${esc(fmtCPF(_fiscalCpf.get(s?.id) || ''))}" placeholder="000.000.000-00">
+          <span class="field-help">Nunca é impresso por inteiro.</span>
+        </div>` : ''}
+        <div class="field" data-billing-field style="display:${kind === 'mecanica' ? 'none' : ''}">
+          <label class="field-label">Matrícula do fiscal (opcional)</label>
           <input class="input" name="fiscal_registration" maxlength="30" value="${esc(s?.fiscal_registration || '')}">
         </div>
         <div class="field" data-billing-field style="display:${kind === 'mecanica' ? 'none' : ''}">
-          <label class="field-label">Portaria de designação</label>
-          <input class="input" name="fiscal_ordinance" maxlength="60" value="${esc(s?.fiscal_ordinance || '')}"
-                 placeholder="ex: Portaria nº 015/2026">
-        </div>` : ''}
+          <label class="field-label">Portaria de designação nº</label>
+          <input class="input" name="fiscal_ordinance" maxlength="60" value="${esc(normOrdinance(s?.fiscal_ordinance))}"
+                 placeholder="ex: 045/2026">
+        </div>
+        ${_hasFiscalDoc ? `
+        <div class="field" data-billing-field style="display:${kind === 'mecanica' ? 'none' : ''}">
+          <label class="field-label">Data da portaria</label>
+          <input class="input" type="date" name="fiscal_ordinance_date" max="${localToday()}" value="${esc(s?.fiscal_ordinance_date || '')}">
+        </div>` : ''}` : ''}
       </div>
 
       <div id="fuels-block" style="display:${kind === 'mecanica' ? 'none' : ''}">
@@ -570,6 +596,9 @@ function openForModal(id) {
     else if (d.length > 2) out = `${d.slice(0,2)}.${d.slice(2)}`;
     return out;
   };
+
+  const cpfInput = m.querySelector('[name="fiscal_cpf"]');
+  cpfInput?.addEventListener('input', () => { cpfInput.value = maskCPF(cpfInput.value); });
 
   // Segmented control
   m.querySelectorAll('#for-kind-seg .seg-btn').forEach(btn => {
@@ -748,11 +777,20 @@ async function saveFor(id) {
     department_id: v.department_id || null,
     contract_number: (v.contract_number || '').trim() || null,
   };
+  const isFuelSupplier = v.kind !== 'mecanica';
   if (_hasBillingCols) {
     payload.price_type = v.price_type === 'desconto_bomba' ? 'desconto_bomba' : 'fixo';
     payload.fiscal_name = (v.fiscal_name || '').trim() || null;
     payload.fiscal_registration = (v.fiscal_registration || '').trim() || null;
-    payload.fiscal_ordinance = (v.fiscal_ordinance || '').trim() || null;
+    payload.fiscal_ordinance = (_hasFiscalDoc ? normOrdinance(v.fiscal_ordinance) : (v.fiscal_ordinance || '').trim()) || null;
+  }
+  if (_hasBillingCols && _hasFiscalDoc) {
+    payload.fiscal_ordinance_date = v.fiscal_ordinance_date || null;
+    if (isFuelSupplier) {
+      const fe = fiscalError({ name: payload.fiscal_name, cpf: v.fiscal_cpf, registration: payload.fiscal_registration,
+                               ordinance: payload.fiscal_ordinance, ordinance_date: payload.fiscal_ordinance_date });
+      if (fe) { showErr(errBox, [fe]); return; }
+    }
   }
 
   const btn = document.getElementById('for-save-btn');
@@ -780,6 +818,11 @@ async function saveFor(id) {
       const ins = fuels.map(f => ({ ...f, supplier_id: supId }));
       const { error: insErr } = await supabase.from('supplier_fuel').insert(ins);
       if (insErr) throw insErr;
+    }
+
+    if (_hasBillingCols && _hasFiscalDoc) {
+      const cpfErr = await saveFiscalCpf(supId, v.fiscal_cpf);
+      if (cpfErr) throw cpfErr;
     }
 
     toast(id ? 'Fornecedor atualizado.' : 'Fornecedor cadastrado.', 'success');

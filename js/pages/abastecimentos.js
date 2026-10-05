@@ -4,7 +4,7 @@ import { esc, fmtDate, fmtMoney, toast, openModal, closeModal, confirmDialog, fo
 import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 import { openPrintTab } from '../thermal.js';
-import { applyInvoicedTotals } from '../billing.js';
+import { applyInvoicedTotals, localToday } from '../billing.js';
 import { loadDriversForPick, driverFieldHTML, mountDriverField } from '../drivers.js';
 
 let _items = [];
@@ -415,7 +415,7 @@ function openAbsModal(id, fromAuth = null) {
   const a = editing ? _items.find(x => x.id === id) : null;
   if (a?.supply_order_id) { toast(LOCKED_MSG(a), 'warning', 6000); return; }
   const me = getProfile();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localToday();
 
   // Pré-preenchimento conforme origem
   let initial;
@@ -438,7 +438,7 @@ function openAbsModal(id, fromAuth = null) {
   } else if (fromAuth) {
     const veh = _vehicles.find(v => v.id === fromAuth.vehicle_id);
     initial = {
-      date: fromAuth.date || today,   // data da autorização (editável)
+      date: fromAuth.date && fromAuth.date <= today ? fromAuth.date : today,   // data da autorização (editável), nunca futura
       vehicle_id: fromAuth.vehicle_id,
       supplier_id: fromAuth.supplier_id,
       fuel_type_code: fromAuth.fuel_type_code,
@@ -489,7 +489,7 @@ function openAbsModal(id, fromAuth = null) {
       <div class="form-grid">
         <div class="field">
           <label class="field-label">Data <span class="req">*</span></label>
-          <input class="input" name="date" type="date" required value="${initial.date}">
+          <input class="input" name="date" type="date" required value="${initial.date}" ${initial.date > today ? '' : `max="${today}"`}>
         </div>
         <div class="field">
           <label class="field-label">Responsável <span class="req">*</span></label>
@@ -663,6 +663,11 @@ async function saveAbs(id, initial) {
 
   if (!vehicle_id || !supplier_id || !fuel_type_code) {
     errBox.innerHTML = '⚠️ Selecione veículo, fornecedor e combustível.';
+    errBox.style.display = 'block'; return;
+  }
+  // Registro antigo com data futura pode ser salvo sem mexer na data; data nova, nunca no futuro
+  if (v.date > localToday() && !(id && v.date === initial?.date)) {
+    errBox.innerHTML = '⚠️ A data do abastecimento não pode ser posterior a hoje.';
     errBox.style.display = 'block'; return;
   }
   const qty = Number(v.quantity);

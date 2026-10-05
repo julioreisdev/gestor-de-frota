@@ -5,6 +5,7 @@ import { icons } from '../icons.js';
 import { getProfile, isAdmin } from '../auth.js';
 import QRCode from 'https://esm.sh/qrcode@1.5.3';
 import { openPrintTab, openThermalPDF, hasChosenThermalWidth, askThermalWidth } from '../thermal.js';
+import { localToday } from '../billing.js';
 import { loadDriversForPick, driverFieldHTML, mountDriverField } from '../drivers.js';
 
 const STATUS_LABEL = { emitida: 'Emitida', utilizada: 'Utilizada', cancelada: 'Cancelada' };
@@ -495,7 +496,7 @@ function openAutModal(id) {
   }
 
   const me = getProfile();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localToday();
   const defaultResp = me?.full_name || '';
 
   // Listas iniciais. Os fornecedores são filtrados dinamicamente pela
@@ -509,7 +510,7 @@ function openAutModal(id) {
       <div class="form-grid">
         <div class="field">
           <label class="field-label">Data <span class="req">*</span></label>
-          <input class="input" name="date" type="date" required value="${a?.date || today}" ${editing ? 'readonly' : ''}>
+          <input class="input" name="date" type="date" required value="${a?.date || today}" ${editing ? 'readonly' : `max="${today}"`}>
         </div>
         <div class="field">
           <label class="field-label">Responsável <span class="req">*</span></label>
@@ -701,6 +702,10 @@ async function saveAut(id) {
   if (errBox) errBox.style.display = 'none';
   if (!form || !form.checkValidity()) { form?.reportValidity(); return; }
   const v = formValues(form);
+  if (!id && v.date > localToday()) {
+    errBox.innerHTML = '⚠️ A data do abastecimento não pode ser posterior a hoje.';
+    errBox.style.display = 'block'; return;
+  }
 
   // Aviso de duplicata: se já existe autorização emitida/utilizada do mesmo
   // veículo na mesma data, confirma antes (não bloqueia, só alerta).
@@ -860,7 +865,9 @@ function concludeFueling(id) {
   if (!a || a.status !== 'emitida') return;
   const veh = _vehicles.find(v => v.id === a.vehicle_id);
   // Data padrão = data da autorização (editável). Usuário pode mudar.
-  const defaultDate = a.date || new Date().toISOString().slice(0, 10);
+  // Autorização antiga com data futura: o abastecimento não pode ficar no futuro.
+  const today = localToday();
+  const defaultDate = a.date && a.date <= today ? a.date : today;
   const body = `
     <p style="font-size:13px;color:var(--text-soft);margin-bottom:var(--s-3)">
       Registrando abastecimento para <strong style="font-family:ui-monospace,monospace;color:var(--primary)">${esc(a.number)}</strong>
@@ -871,7 +878,7 @@ function concludeFueling(id) {
       <div class="form-grid">
         <div class="field">
           <label class="field-label">Data <span class="req">*</span></label>
-          <input class="input" name="date" type="date" required value="${defaultDate}">
+          <input class="input" name="date" type="date" required max="${today}" value="${defaultDate}">
         </div>
         <div class="field">
           <label class="field-label">Quantidade real (L) <span class="req">*</span></label>
@@ -911,6 +918,10 @@ function concludeFueling(id) {
     errBox.style.display = 'none';
     if (!form.checkValidity()) { form.reportValidity(); return; }
     const v = formValues(form);
+    if (v.date > localToday()) {
+      errBox.innerHTML = '⚠️ A data do abastecimento não pode ser posterior a hoje.';
+      errBox.style.display = 'block'; return;
+    }
     const qty = Number(v.quantity);
     if (qty > Number(a.authorized_quantity)) {
       errBox.innerHTML = `⚠️ Quantidade excede o autorizado (${Number(a.authorized_quantity).toFixed(2)} L).`;

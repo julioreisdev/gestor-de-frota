@@ -2,10 +2,10 @@
 // São montados só com os dados congelados na ordem e no termo: reimprimir dá o
 // mesmo documento.
 import { supabase } from './supabase.js';
-import { esc, fmtDate, fmtCNPJ, formatPlate, toast } from './ui.js';
+import { esc, fmtDate, fmtCNPJ, formatPlate, toast, hideCPF } from './ui.js';
 import { getEntity, reportLogoUrl } from './shell.js';
 import { openPrintTab } from './thermal.js';
-import { fmtLiters, fmtAmount, fmtPrice, fmtInt, toCenti, fmtCents, billingError } from './billing.js';
+import { fmtLiters, fmtAmount, fmtPrice, fmtInt, toCenti, fmtCents, billingError, fmtOrdinance } from './billing.js';
 
 // Estilo comum aos documentos (modelos/_estilo.css do pacote do cliente).
 const DOC_CSS = `
@@ -185,7 +185,12 @@ export function receiptTermHTML({ entity, city, term, order, items, lines }) {
   const contratada = `${esc(order.supplier_name_snapshot)} · CNPJ ${esc(fmtCNPJ(order.supplier_cnpj_snapshot))}`;
   const nf = `${esc(term.invoice_number)}${term.invoice_series ? ' · série ' + esc(term.invoice_series) : ''}`;
   const vehicles = termVehicles(lines);
-  const fiscalLine = ['Fiscal do contrato', term.fiscal_registration ? 'Mat. ' + term.fiscal_registration : ''].filter(Boolean).join(' · ');
+  // Identificação do fiscal: matrícula, se houver; senão o CPF com parte oculta (nunca inteiro)
+  const fiscalId = term.fiscal_registration ? 'Mat. ' + term.fiscal_registration
+    : term.fiscal_cpf ? 'CPF ' + hideCPF(term.fiscal_cpf) : '';
+  const fiscalLine = ['Fiscal do contrato', fiscalId].filter(Boolean).join(' · ');
+  // Termo anterior à v2.1 guarda o texto da portaria como foi digitado e não tem data
+  const ordinance = fmtOrdinance(term.fiscal_ordinance, term.fiscal_ordinance_date);
 
   const itemRows = items.map(it => `
     <tr><td>${esc(it.fuel_label)}</td><td class="n">${fmtInt(it.fuelings_count)}</td><td class="n">${fmtLiters(it.liters)}</td>
@@ -248,7 +253,7 @@ ${canceledHTML(term, 'TERMO CANCELADO')}
 <p class="local">${esc(city || '')} (PI), ${esc(fmtDate(term.issue_date))}.</p>
 
 <div class="assinaturas">
-  <div><b>${esc(term.fiscal_name)}</b>${esc(fiscalLine)}${term.fiscal_ordinance ? '<br>' + esc(term.fiscal_ordinance) : ''}</div>
+  <div><b>${esc(term.fiscal_name)}</b>${esc(fiscalLine)}${ordinance ? '<br>' + esc(ordinance) : ''}</div>
   <div><b>${esc(dash(term.responsible_name_snapshot))}</b>${esc(term.responsible_role_snapshot || '')}</div>
 </div>
 

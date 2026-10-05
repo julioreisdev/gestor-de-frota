@@ -6,7 +6,7 @@ import { esc, toast, fmtDate, fmtCNPJ, openModal, closeModal } from '../ui.js';
 import { icons } from '../icons.js';
 import { getProfile } from '../auth.js';
 import { exportXLSX, timestampFilename } from '../export.js';
-import { fmtLiters, fmtAmount, ORDER_STATUS, billingError, isBillingMissing, withTimeout } from '../billing.js';
+import { fmtLiters, fmtAmount, ORDER_STATUS, billingError, isBillingMissing, withTimeout, nfMatches } from '../billing.js';
 import { printSupplyOrder, printReceiptTerm } from '../billing_docs.js';
 import { openTermModal, openCancelTermModal, openTermHistoryModal } from './faturamento_termo.js';
 
@@ -157,6 +157,8 @@ function matches(o) {
   } else if (_filter.status && o.status !== _filter.status) return false;
   if (!_search) return true;
   const t = _search.toLowerCase();
+  // Nota fiscal: compara só os dígitos ("4512" acha "4.512" e "004512")
+  if ((o.terms || []).some(x => nfMatches(x.invoice_number, _search))) return true;
   return [o.number, o.department_acronym_snapshot, o.department_name_snapshot, o.supplier_name_snapshot,
           o.contract_number_snapshot, o.commitment_number, o.reference_month, fmtCNPJ(o.supplier_cnpj_snapshot),
           ...(o.terms || []).map(t => t.invoice_number)]

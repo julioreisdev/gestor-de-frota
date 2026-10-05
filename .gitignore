@@ -4,6 +4,12 @@ instances.json
 
 # Material do cliente e planejamento interno: não publicar (GitHub Pages serve tudo que está no repo)
 gerir-frota-of-termo/
+atualizado-gerir-frota-of-termo/
+ALTERACOES_*.pdf
+exemplo_anexo_conferencia.pdf
+logo-atualizada-*.jpg
+# Apaga ordens e termos de teste: roda uma vez, à mão, em cada cidade
+limpeza_testes_faturamento.sql
 PLANEJAMENTO_*.md
 PLANEJAMENTO_*.pdf
 

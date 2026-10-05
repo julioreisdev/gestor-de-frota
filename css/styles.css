@@ -155,7 +155,7 @@ svg { flex-shrink: 0; }
 .login-brand img {
   display: block;
   width: auto;
-  height: 80px;
+  height: 112px;
   max-width: min(240px, 80%);
   margin: 0 auto var(--s-3);
   object-fit: contain;
@@ -211,13 +211,12 @@ svg { flex-shrink: 0; }
 }
 .sidebar-logo {
   width: 32px; height: 32px;
-  background: var(--primary-tint);
   border-radius: var(--r-md);
   display: grid; place-items: center;
   flex-shrink: 0;
   overflow: hidden;
 }
-.sidebar-logo img { width: 32px; height: 32px; object-fit: contain; }
+.sidebar-logo img { width: 32px; height: 32px; object-fit: cover; display: block; }
 .sidebar-title {
   font-size: 15px;
   font-weight: 700;
@@ -2276,7 +2275,7 @@ input[type="month"]::-webkit-calendar-picker-indicator {
 .of-sub b { font-weight: 600; color: var(--text-soft); }
 .of-col-supplier { min-width: 176px; }
 #of-filters .select.chip { max-width: 280px; }
-#of-list-card .actions-row { flex-wrap: nowrap; }
+#of-list-card .actions-row, #trl-card .actions-row { flex-wrap: nowrap; }
 .of-summary > div { align-content: start; }
 .trm-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .trm-section {

@@ -319,7 +319,7 @@ O `cliente.html` foi gerado por IA e tem coisas que **não** vão pra produção
 - `/docs` populado com **specs oficiais do TCE-PI** (manuais técnicos mar/2026, regras de validação mar–mai/2026, leiautes 2025, planilhas de domínio, CSVs de exemplo, lista IBGE). Tudo lido e consolidado neste arquivo.
 - `modelagem.md` na raiz: proposta inicial de schema Supabase (histórica; o schema real é o `init.sql`).
 - Sistema em produção em duas instâncias: Jurema e Anísio de Abreu.
-- Faturamento e Motoristas publicados em 28/09/2026.
+- Faturamento e Motoristas publicados em 28/09/2026; ajustes v2.1 e logo nova em out/2026.
 - Próximos passos serão definidos pelo usuário (lembrete: **nunca começar sem perguntar**).
 
 ## Faturamento e Motoristas (set/2026)
@@ -329,7 +329,7 @@ O detalhe completo (regras, telas, testes) está em `PLANEJAMENTO_FATURAMENTO_MO
 ### Faturamento
 
 - **Contrato = cadastro de fornecedor** (posto + secretaria + nº do contrato). Não existe tabela de contrato. O mesmo posto tem um cadastro por contrato.
-- **Ordem de Fornecimento** (`supply_order`): reúne abastecimentos de um contrato num período, só quantidades. Numeração `NNN/AAAA` por secretaria e exercício.
+- **Ordem de Fornecimento** (`supply_order`): reúne abastecimentos de um contrato num período, só quantidades. Numeração `NNN/AAAA` **geral do município** por exercício (v2.1: FMS 001, FMAS 002, FMS 003); o índice `ux_supply_order_year_seq` garante. O número informado (Abreu) continua único por secretaria.
 - **Termo de Recebimento** (`receipt_term`): gerado da ordem quando a nota fiscal chega. Número = número da ordem. No máximo um termo ativo por ordem.
 - **Toda escrita passa por função** (`emit_supply_order`, `cancel_supply_order`, `set_supply_order_commitment`, `emit_receipt_term`, `cancel_receipt_term`). As tabelas do faturamento só têm política de leitura.
 - **Abastecimento em ordem fica travado** por gatilho (`trg_fueling_billing_lock`). As funções do faturamento passam pela trava com `set_config('gerirfrota.billing_bypass', '1', true)`.
@@ -338,6 +338,17 @@ O detalhe completo (regras, telas, testes) está em `PLANEJAMENTO_FATURAMENTO_MO
 - **Valor faturado**: `fueling.invoiced_total`. As telas usam esse valor quando existe (via `applyInvoicedTotals` / `queryFuelings` em [js/billing.js](js/billing.js)); senão, `total`.
 - **Numeração informada** (`entity.billing_numbering = 'informado'`): para cidade em que a ordem é emitida em outro sistema (Anísio de Abreu). O usuário digita o número, o PDF sai como "Relação de abastecimentos" e não como ordem.
 - **Posto enxerga por CNPJ** (`current_user_supplier_ids()`), não por cadastro: vê autorizações, abastecimentos e ordens de todos os contratos do seu CNPJ. Não vê termos nem motoristas.
+
+### Ajustes v2.1 (out/2026)
+
+Pedidos do cliente em `atualizado-gerir-frota-of-termo/` (fora do git).
+
+- **Fiscal do contrato**: nome, CPF e portaria (número e data) obrigatórios; matrícula opcional. O CPF fica em `supplier_fiscal_doc` (tabela à parte, que o posto não lê); o resto em `supplier` (`fiscal_ordinance` guarda só o número, `fiscal_ordinance_date` a data). Um fiscal por contrato. Regras em [js/billing.js](js/billing.js) (`fiscalError`, `fmtOrdinance`).
+- **Termo**: `emit_receipt_term` exige CPF e data da portaria e copia tudo para o termo. O PDF imprime "Mat. X" ou, sem matrícula, "CPF ***.456.789-**" (nunca o CPF inteiro), e "Portaria nº N, de dd/mm/aaaa".
+- **Busca por nota fiscal**: só dígitos, sem zeros à esquerda (`nfMatches`), na lista de ordens e na aba Termos de Recebimento ([js/pages/faturamento_termos.js](js/pages/faturamento_termos.js)).
+- **Data futura bloqueada** em autorização de abastecimento e em abastecimento: gatilho `block_future_date` (data do servidor em `America/Fortaleza`, via `local_today()`) e validação nas telas. Registro antigo com data futura continua salvando se a data não mudar. Nas telas, "hoje" é sempre `localToday()`, nunca `toISOString()` (UTC vira o dia às 21h).
+- **Anexo de conferência** ([js/conference_annex.js](js/conference_annex.js)): nove pendências (P1 a P9) no fim do "Imprimir PDF (tudo)" dos Relatórios, **só para administrador**. O corpo do relatório, os PDFs por seção e o Excel não o citam. Manter assim.
+- `limpeza_testes_faturamento.sql` (fora do git): apaga ordens e termos de teste e devolve os abastecimentos a pendentes, com cópia em `backup_faturamento`. Destrutivo, roda à mão.
 
 ### Motoristas
 
