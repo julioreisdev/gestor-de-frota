@@ -868,6 +868,7 @@ function concludeFueling(id) {
   // Autorização antiga com data futura: o abastecimento não pode ficar no futuro.
   const today = localToday();
   const defaultDate = a.date && a.date <= today ? a.date : today;
+  const minDate = a.date && a.date <= today ? a.date : '';   // nunca antes da autorização
   const body = `
     <p style="font-size:13px;color:var(--text-soft);margin-bottom:var(--s-3)">
       Registrando abastecimento para <strong style="font-family:ui-monospace,monospace;color:var(--primary)">${esc(a.number)}</strong>
@@ -878,7 +879,7 @@ function concludeFueling(id) {
       <div class="form-grid">
         <div class="field">
           <label class="field-label">Data <span class="req">*</span></label>
-          <input class="input" name="date" type="date" required max="${today}" value="${defaultDate}">
+          <input class="input" name="date" type="date" required max="${today}" ${minDate ? `min="${minDate}"` : ''} value="${defaultDate}">
         </div>
         <div class="field">
           <label class="field-label">Quantidade real (L) <span class="req">*</span></label>
@@ -920,6 +921,10 @@ function concludeFueling(id) {
     const v = formValues(form);
     if (v.date > localToday()) {
       errBox.innerHTML = '⚠️ A data do abastecimento não pode ser posterior a hoje.';
+      errBox.style.display = 'block'; return;
+    }
+    if (a.date && v.date < a.date) {
+      errBox.innerHTML = `⚠️ A data do abastecimento não pode ser anterior à data da autorização ${esc(a.number)} (${fmtDate(a.date)}).`;
       errBox.style.display = 'block'; return;
     }
     const qty = Number(v.quantity);

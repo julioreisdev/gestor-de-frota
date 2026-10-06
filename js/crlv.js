@@ -44,8 +44,9 @@ const filled = (s) => !!s && !/^[*\s/.-]*$/.test(s);
 // ---------------------------------------------------------------------------
 // Leitura do PDF
 // ---------------------------------------------------------------------------
-/** Itens de texto da 1ª página, com posição (y cresce para baixo). */
-async function readItems(file) {
+/** Itens de texto com posição (y cresce para baixo). Lê até `maxPages`
+ *  páginas; as seguintes ficam deslocadas para baixo da primeira. */
+export async function readItems(file, maxPages = 1) {
   const lib = await loadPdfJs();
   const data = new Uint8Array(await file.arrayBuffer());
   let pdf;
@@ -55,18 +56,24 @@ async function readItems(file) {
     if (e?.name === 'PasswordException') throw new Error('O PDF está protegido por senha. Baixe o CRLV de novo sem senha.');
     throw new Error('Não foi possível abrir o arquivo. Confira se é um PDF válido.');
   }
-  const page = await pdf.getPage(1);
-  const h = page.getViewport({ scale: 1 }).height;
-  const content = await page.getTextContent();
-  const items = content.items
-    .filter(i => i.str && i.str.trim())
-    .map(i => ({
-      text: i.str.trim(),
-      x: i.transform[4],
-      y: h - i.transform[5],
-      w: i.width || 0,
-      size: Math.abs(i.transform[3]) || i.height || 0,
-    }));
+  const items = [];
+  let offset = 0;
+  for (let n = 1; n <= Math.min(maxPages, pdf.numPages); n++) {
+    const page = await pdf.getPage(n);
+    const h = page.getViewport({ scale: 1 }).height;
+    const content = await page.getTextContent();
+    content.items
+      .filter(i => i.str && i.str.trim())
+      .forEach(i => items.push({
+        text: i.str.trim(),
+        x: i.transform[4],
+        y: offset + h - i.transform[5],
+        w: i.width || 0,
+        size: Math.abs(i.transform[3]) || i.height || 0,
+        page: n,
+      }));
+    offset += h + 100;
+  }
   pdf.destroy();
   return items;
 }
@@ -75,7 +82,10 @@ async function readItems(file) {
 function valueBelow(items, label) {
   const target = norm(label);
   const lab = items.find(i => norm(i.text) === target);
-  if (!lab) return '';
+  return lab ? valueBelowItem(items, lab) : '';
+}
+/** Idem, a partir do item do rótulo já localizado. */
+export function valueBelowItem(items, lab) {
   const cand = items
     .filter(i => i !== lab && i.size > lab.size + 1 && Math.abs(i.x - lab.x) <= 6 && i.y > lab.y && i.y - lab.y < 32)
     .sort((a, b) => a.y - b.y);

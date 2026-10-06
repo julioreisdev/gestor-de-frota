@@ -1650,5 +1650,33 @@ create trigger trg_fueling_block_future_date
   before insert or update of date on fueling
   for each row execute function block_future_date();
 
+-- c) Abastecimento ligado a autorização não pode ter data anterior à da
+--    autorização (abasteceu antes de ser autorizado). Vale ao incluir e ao
+--    trocar a data ou a autorização; registro antigo segue como está.
+create or replace function block_fueling_before_authorization() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  v_auth_date date;
+  v_number text;
+begin
+  if new.authorization_id is null then return new; end if;
+  if tg_op = 'UPDATE' and new.date is not distinct from old.date
+     and new.authorization_id is not distinct from old.authorization_id then
+    return new;
+  end if;
+  select a.date, a.number into v_auth_date, v_number
+    from fueling_authorization a where a.id = new.authorization_id;
+  if v_auth_date is not null and new.date < v_auth_date then
+    raise exception 'A data do abastecimento não pode ser anterior à data da autorização % (%).',
+      v_number, to_char(v_auth_date, 'DD/MM/YYYY') using errcode = 'P0001';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_fueling_before_authorization on fueling;
+create trigger trg_fueling_before_authorization
+  before insert or update of date, authorization_id on fueling
+  for each row execute function block_fueling_before_authorization();
+
 -- Reload do schema cache do PostgREST
 notify pgrst, 'reload schema';

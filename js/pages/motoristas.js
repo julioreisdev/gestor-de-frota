@@ -18,6 +18,7 @@ import {
   CNH_CATEGORIES, BLOOD_TYPES, EMPLOYMENT_TYPES, COURSE_KINDS, STATES, CNH_STATUS,
   cnhStatus, toxicologyExpired, cnhSummary,
 } from '../drivers.js';
+import { readCNH } from '../cnh.js';
 
 let _items = [];
 let _depts = [];
@@ -373,6 +374,18 @@ function openDriverModal(id) {
 
   const body = `
     <form id="drv-form" autocomplete="off" novalidate>
+      <div class="crlv-box" style="margin-bottom:var(--s-4)">
+        <span class="crlv-icon">${icons.fileUp}</span>
+        <div class="crlv-text">
+          <strong>Preencher pela CNH Digital</strong>
+          <span>Selecione o PDF da CNH Digital (app Carteira Digital de Trânsito ou gov.br). O arquivo é lido no próprio aparelho e não é enviado nem guardado.</span>
+        </div>
+        <label class="btn btn-outline btn-sm crlv-btn" id="cnh-btn">
+          <span class="crlv-btn-label">Selecionar PDF</span>
+          <input type="file" id="cnh-file" accept="application/pdf,.pdf" hidden>
+        </label>
+      </div>
+      <div id="cnh-result"></div>
       <div class="drv-fields">
         ${field('Nome completo', text('full_name', d?.full_name, 'maxlength="120" required'), { cls: 'drv-col-2', req: true, name: 'full_name' })}
         ${field('CPF', text('cpf', d ? fmtCPF(d.cpf) : '', 'inputmode="numeric" maxlength="14" placeholder="000.000.000-00" required'), { req: true, name: 'cpf' })}
@@ -466,8 +479,83 @@ function openDriverModal(id) {
     const fn = masks[e.target.name];
     if (fn) e.target.value = fn(e.target.value);
     if (e.target.name) setError(e.target.name, '');
+    e.target.classList?.remove('is-autofilled');   // campo vindo da CNH perde o destaque quando o usuário mexe
     hints();
   });
+
+  // Preencher pela CNH Digital: lê o PDF no navegador e preenche o formulário.
+  // Nada é salvo até o usuário clicar em Salvar.
+  const cnhInput = m.querySelector('#cnh-file');
+  cnhInput.addEventListener('change', async () => {
+    const file = cnhInput.files?.[0];
+    cnhInput.value = '';                  // permite escolher o mesmo arquivo de novo
+    if (!file) return;
+    const btn = m.querySelector('#cnh-btn'), label = btn.querySelector('.crlv-btn-label');
+    const box = m.querySelector('#cnh-result');
+    btn.classList.add('is-loading'); label.innerHTML = '<span class="spinner"></span> Lendo…';
+    box.innerHTML = '';
+    try {
+      const data = await readCNH(file);
+      if (!m.isConnected) return;
+      box.innerHTML = applyCNH(data);
+    } catch (e) {
+      if (!m.isConnected) return;
+      box.innerHTML = `<div class="nof-notice is-block crlv-result">
+        <span class="nof-notice-icon">${icons.alert}</span>
+        <div class="nof-notice-body"><strong>Não foi possível ler a CNH</strong><span>${esc(e?.message || String(e))}</span></div>
+      </div>`;
+    } finally {
+      btn.classList.remove('is-loading'); label.textContent = 'Selecionar PDF';
+    }
+  });
+
+  /** Preenche o formulário com o que foi lido e devolve o resumo (HTML). */
+  function applyCNH(c) {
+    const filledList = [], warnings = [];
+    const set = (name, value, label, fmt = (v) => v) => {
+      const input = el(name);
+      if (!input || value == null || value === '') return;
+      const val = String(fmt(value));
+      if (input.tagName === 'SELECT' && ![...input.options].some(o => o.value === val)) return;
+      input.value = val;
+      input.classList.add('is-autofilled');
+      setError(name, '');
+      filledList.push(label);
+    };
+    if (d && c.cpf && d.cpf && c.cpf !== d.cpf) {
+      warnings.push(`O CPF da CNH (${fmtCPF(c.cpf)}) é diferente do CPF deste cadastro (${fmtCPF(d.cpf)}). Confira se é a CNH da pessoa certa.`);
+    }
+    set('full_name', c.full_name, 'Nome');
+    set('cpf', c.cpf, 'CPF', fmtCPF);
+    set('cnh_number', c.cnh_number, 'Nº do registro');
+    set('cnh_category', c.cnh_category, 'Categoria');
+    set('cnh_expiry', c.cnh_expiry, 'Validade');
+    set('cnh_first_issue', c.cnh_first_issue, 'Primeira habilitação');
+    set('cnh_state', c.cnh_state, 'UF emissora');
+    set('cnh_paid_activity', c.cnh_paid_activity == null ? '' : String(c.cnh_paid_activity), 'Atividade remunerada');
+    set('birth_date', c.birth_date, 'Data de nascimento');
+    set('rg', c.rg, 'RG');
+    set('rg_issuer', c.rg_issuer, 'Órgão emissor');
+    if (c.cnh_expiry && c.cnh_expiry < today) warnings.push(`CNH vencida em ${fmtDate(c.cnh_expiry)}.`);
+    if (!c.cnh_number) warnings.push('Nº do registro não encontrado no PDF: preencha à mão.');
+    // abre os grupos que receberam dados e atualiza "N preenchidos"
+    ['cnh', 'personal'].forEach(k => { const g = form.querySelector(`[data-group="${k}"]`); if (g && [...g.querySelectorAll('.is-autofilled')].length) g.open = true; });
+    hints();
+    if (!filledList.length) {
+      return `<div class="nof-notice is-block crlv-result">
+        <span class="nof-notice-icon">${icons.alert}</span>
+        <div class="nof-notice-body"><strong>Nenhum campo reconhecido</strong><span>O PDF foi lido, mas os campos da CNH não foram encontrados. Preencha à mão.</span></div>
+      </div>`;
+    }
+    return `<div class="nof-notice is-ok crlv-result">
+      <span class="nof-notice-icon">${icons.check}</span>
+      <div class="nof-notice-body">
+        <strong>${filledList.length} campo(s) preenchido(s) pela CNH</strong>
+        <span>${esc(filledList.join(', '))}. Confira os campos destacados antes de salvar.</span>
+        ${warnings.map(w => `<span class="crlv-warn">⚠️ ${esc(w)}</span>`).join('')}
+      </div>
+    </div>`;
+  }
   form.addEventListener('change', (e) => {
     const k = e.target.dataset.course;
     if (k) {

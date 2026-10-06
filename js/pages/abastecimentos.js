@@ -53,7 +53,7 @@ export async function renderAbastecimentos() {
         <div class="search ${_filter.search ? 'has-value' : ''}" id="abs-search-box">
           ${icons.search}
           <input id="abs-search" type="search"
-                 placeholder="Buscar por placa, fornecedor, responsável…"
+                 placeholder="Buscar por placa, autorização, fornecedor, responsável…"
                  autocomplete="off" value="${esc(_filter.search)}">
           <button class="clear" id="abs-search-clear" aria-label="Limpar busca">${icons.close}</button>
         </div>
@@ -125,7 +125,7 @@ const FUELING_COLS = `
       responsible_name, notes,
       vehicle_plate_snapshot, department_acronym_snapshot, supplier_trade_name_snapshot,
       created_at,
-      authorization:authorization_id(number)`;
+      authorization:authorization_id(number, date)`;
 const fuelingQuery = (cols) => supabase.from('fueling').select(cols)
   .is('deleted_at', null).order('date', { ascending: false }).order('created_at', { ascending: false });
 
@@ -232,6 +232,10 @@ function applyFilters() {
       if (veh?.department_id !== _filter.dept) return false;
     }
     if (!t) return true;
+    // Nº da autorização: aceita com ou sem o hífen (20260930-016 ou 20260930016)
+    const tDigits = t.replace(/\D/g, '');
+    const authNo = a.authorization?.number || '';
+    if (authNo && (authNo.toLowerCase().includes(t) || (tDigits.length >= 4 && authNo.replace(/\D/g, '').includes(tDigits)))) return true;
     return (a.vehicle_plate_snapshot || '').toLowerCase().includes(t)
         || (a.supplier_trade_name_snapshot || '').toLowerCase().includes(t)
         || (a.responsible_name || '').toLowerCase().includes(t)
@@ -433,6 +437,8 @@ function openAbsModal(id, fromAuth = null) {
       responsible_name: a.responsible_name,
       notes: a.notes,
       authorization_id: a.authorization_id,
+      _authNumber: a.authorization?.number || '',
+      _authDate: a.authorization?.date || '',
       _maxQty: null,
     };
   } else if (fromAuth) {
@@ -450,6 +456,8 @@ function openAbsModal(id, fromAuth = null) {
       responsible_name: fromAuth.responsible_name,
       notes: 'Importado da autorização ' + fromAuth.number,
       authorization_id: fromAuth.id,
+      _authNumber: fromAuth.number,
+      _authDate: fromAuth.date || '',
       _maxQty: Number(fromAuth.authorized_quantity),
     };
   } else {
@@ -489,7 +497,8 @@ function openAbsModal(id, fromAuth = null) {
       <div class="form-grid">
         <div class="field">
           <label class="field-label">Data <span class="req">*</span></label>
-          <input class="input" name="date" type="date" required value="${initial.date}" ${initial.date > today ? '' : `max="${today}"`}>
+          <input class="input" name="date" type="date" required value="${initial.date}" ${initial.date > today ? '' : `max="${today}"`}
+                 ${initial._authDate && initial._authDate <= today && initial.date >= initial._authDate ? `min="${initial._authDate}"` : ''}>
         </div>
         <div class="field">
           <label class="field-label">Responsável <span class="req">*</span></label>
@@ -668,6 +677,11 @@ async function saveAbs(id, initial) {
   // Registro antigo com data futura pode ser salvo sem mexer na data; data nova, nunca no futuro
   if (v.date > localToday() && !(id && v.date === initial?.date)) {
     errBox.innerHTML = '⚠️ A data do abastecimento não pode ser posterior a hoje.';
+    errBox.style.display = 'block'; return;
+  }
+  // Abasteceu antes de ser autorizado: não vale (registro antigo pode ser salvo sem mexer na data)
+  if (initial?._authDate && v.date < initial._authDate && !(id && v.date === initial.date)) {
+    errBox.innerHTML = `⚠️ A data do abastecimento não pode ser anterior à data da autorização ${esc(initial._authNumber)} (${fmtDate(initial._authDate)}).`;
     errBox.style.display = 'block'; return;
   }
   const qty = Number(v.quantity);
