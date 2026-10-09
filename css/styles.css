@@ -136,6 +136,7 @@ svg { flex-shrink: 0; }
    ========================================================================= */
 .login-page {
   min-height: 100vh;
+  min-height: 100dvh;       /* iOS Safari: centro real, sem contar a barra do navegador */
   display: flex; align-items: center; justify-content: center;
   padding: var(--s-4);
   background:
@@ -2608,7 +2609,7 @@ input[type="month"]::-webkit-calendar-picker-indicator {
   .btn-icon.btn-sm { width: 38px; height: 38px; }
 
   /* ----- LOGIN ----- */
-  .login-page { padding: var(--s-3); align-items: flex-start; padding-top: 12vh; }
+  .login-page { padding: var(--s-3); }
   .login-card {
     padding: var(--s-6) var(--s-5);
     max-width: 100%;
@@ -2625,7 +2626,8 @@ input[type="month"]::-webkit-calendar-picker-indicator {
   .breadcrumb > *:not(.crumb-current):not(:nth-last-child(2)) { display: none; }
 
   /* ----- PAGE ----- */
-  .page { padding: var(--s-4); }
+  /* o shorthand não pode engolir o espaço da barra inferior definido acima */
+  .page { padding: var(--s-4) var(--s-4) calc(var(--bottom-nav-h) + env(safe-area-inset-bottom) + var(--s-6)); }
   .page-header {
     flex-direction: column;
     align-items: stretch;
