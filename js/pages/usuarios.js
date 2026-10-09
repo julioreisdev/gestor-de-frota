@@ -4,8 +4,16 @@ import { esc, fmtDate, toast, openModal, closeModal, confirmDialog, formValues, 
 import { icons } from '../icons.js';
 import { getProfile } from '../auth.js';
 
-const ROLE_LABEL = { admin: 'Administrador', usuario: 'Usuário', fornecedor: 'Fornecedor' };
-const ROLE_BADGE = { admin: 'badge', usuario: 'badge badge-success', fornecedor: 'badge badge-warning' };
+const ROLE_LABEL = { admin: 'Administrador', usuario: 'Usuário', fornecedor: 'Fornecedor', faturamento: 'Faturamento' };
+const ROLE_BADGE = { admin: 'badge', usuario: 'badge badge-success', fornecedor: 'badge badge-warning', faturamento: 'badge badge-neutral' };
+
+// O que cada perfil enxerga (ajuda no formulário)
+const ROLE_HELP = {
+  admin: 'Acesso total: cadastros, operação, relatórios, exportação e usuários.',
+  usuario: 'Autorizações, abastecimentos, manutenções, faturamento, relatórios e exportação.',
+  fornecedor: 'Posto ou mecânica: só as próprias autorizações, abastecimentos e ordens.',
+  faturamento: 'Só o Faturamento: ordens de fornecimento e termos de recebimento de todas as secretarias.',
+};
 
 let _users = [];
 let _suppliers = [];
@@ -213,7 +221,9 @@ function openUserModal(id) {
             <option value="admin"      ${u?.role === 'admin' ? 'selected' : ''}>Administrador</option>
             <option value="usuario"    ${u?.role === 'usuario' ? 'selected' : ''}>Usuário</option>
             <option value="fornecedor" ${u?.role === 'fornecedor' ? 'selected' : ''}>Fornecedor</option>
+            <option value="faturamento" ${u?.role === 'faturamento' ? 'selected' : ''}>Faturamento</option>
           </select>
+          <span class="field-help" id="user-role-help">${ROLE_HELP[u?.role || 'admin']}</span>
         </div>
         <div class="field" id="supplier-field" style="${u?.role === 'fornecedor' ? '' : 'display:none'}">
           <label class="field-label">Fornecedor vinculado <span class="req">*</span></label>
@@ -246,6 +256,7 @@ function openUserModal(id) {
   m.querySelector('[data-cancel]').addEventListener('click', closeModal);
   m.querySelector('#user-role-select').addEventListener('change', (e) => {
     m.querySelector('#supplier-field').style.display = e.target.value === 'fornecedor' ? '' : 'none';
+    m.querySelector('#user-role-help').textContent = ROLE_HELP[e.target.value] || '';
   });
   m.querySelector('#user-save-btn').addEventListener('click', () => saveUser(editing ? id : null));
 }

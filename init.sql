@@ -9,7 +9,7 @@ create extension if not exists pgcrypto;
 -- =============================================================================
 -- ENUMS
 -- =============================================================================
-create type user_role            as enum ('admin','usuario','fornecedor');
+create type user_role            as enum ('admin','usuario','fornecedor','faturamento');
 create type supplier_kind        as enum ('posto','mecanica','ambos');
 create type authorization_status as enum ('emitida','utilizada','cancelada');
 create type maintenance_kind     as enum ('preventiva','corretiva','revisao','sinistro','outros');
@@ -2066,7 +2066,7 @@ drop policy if exists p_vehicle_read_internal on vehicle;
 create policy p_vehicle_read_internal on vehicle for select
   using (
     current_user_role() = 'admin'
-    or (current_user_role() = 'usuario'
+    or (current_user_role()::text in ('usuario','faturamento')
         and (current_user_department_id() is null
              or department_id is null
              or department_id = current_user_department_id()))
@@ -2076,7 +2076,7 @@ drop policy if exists p_fueling_read_internal on fueling;
 create policy p_fueling_read_internal on fueling for select
   using (
     current_user_role() = 'admin'
-    or (current_user_role() = 'usuario'
+    or (current_user_role()::text in ('usuario','faturamento')
         and (current_user_department_id() is null
              or exists (
                select 1 from vehicle v
@@ -2104,7 +2104,7 @@ drop policy if exists p_supplier_read_internal on supplier;
 create policy p_supplier_read_internal on supplier for select
   using (
     current_user_role() = 'admin'
-    or (current_user_role() = 'usuario'
+    or (current_user_role()::text in ('usuario','faturamento')
         and (current_user_department_id() is null
              or department_id is null
              or department_id = current_user_department_id()))
@@ -2114,7 +2114,7 @@ drop policy if exists p_supfuel_read_internal on supplier_fuel;
 create policy p_supfuel_read_internal on supplier_fuel for select
   using (
     current_user_role() = 'admin'
-    or (current_user_role() = 'usuario'
+    or (current_user_role()::text in ('usuario','faturamento')
         and (current_user_department_id() is null
              or exists (
                select 1 from supplier s
@@ -2493,7 +2493,7 @@ drop policy if exists p_so_read_internal on supply_order;
 create policy p_so_read_internal on supply_order for select
   using (
     current_user_role() = 'admin'
-    or (current_user_role() = 'usuario'
+    or (current_user_role()::text in ('usuario','faturamento')
         and (current_user_department_id() is null
              or department_id = current_user_department_id()))
   );
@@ -2567,7 +2567,7 @@ language plpgsql stable security definer set search_path = public, auth as $$
 declare v_role user_role; v_dept uuid;
 begin
   v_role := current_user_role();
-  if v_role is null or v_role not in ('admin','usuario') then
+  if v_role is null or v_role not in ('admin','usuario','faturamento') then
     raise exception 'Seu perfil não tem acesso ao faturamento.' using errcode = '42501';
   end if;
   if v_role = 'usuario' then
@@ -2890,7 +2890,7 @@ begin
   select * into v_o from supply_order o where o.id = p_order;
   if v_o.id is null then return; end if;
   v_role := current_user_role();
-  if v_role = 'admin' then null;
+  if v_role in ('admin','faturamento') then null;
   elsif v_role = 'usuario' then
     if current_user_department_id() is not null
        and current_user_department_id() is distinct from v_o.department_id then return; end if;
@@ -2921,7 +2921,7 @@ language plpgsql stable security definer set search_path = public, auth as $$
 declare v_role user_role; v_dept uuid; v_start date;
 begin
   v_role := current_user_role();
-  if v_role is null or v_role not in ('admin','usuario') then return; end if;
+  if v_role is null or v_role not in ('admin','usuario','faturamento') then return; end if;
   if v_role = 'usuario' then v_dept := current_user_department_id(); end if;
   select e.billing_start_date into v_start from entity e where e.id = 1;
   if v_start is null then return; end if;
@@ -3032,7 +3032,7 @@ alter table receipt_term_fueling enable row level security;
 drop policy if exists p_rt_read on receipt_term;
 create policy p_rt_read on receipt_term for select
   using (
-    current_user_role() in ('admin','usuario')
+    current_user_role()::text in ('admin','usuario','faturamento')
     and exists (select 1 from supply_order o where o.id = receipt_term.supply_order_id)
   );
 drop policy if exists p_rti_read on receipt_term_item;
@@ -3258,7 +3258,7 @@ begin
    where t.id = p_term;
   if v_dept is null then return; end if;
   v_role := current_user_role();
-  if v_role = 'admin' then null;
+  if v_role in ('admin','faturamento') then null;
   elsif v_role = 'usuario' then
     if current_user_department_id() is not null
        and current_user_department_id() is distinct from v_dept then return; end if;
@@ -3698,7 +3698,7 @@ alter table supplier_fiscal_doc enable row level security;
 drop policy if exists p_sfd_read on supplier_fiscal_doc;
 create policy p_sfd_read on supplier_fiscal_doc for select
   using (
-    current_user_role() in ('admin','usuario')
+    current_user_role()::text in ('admin','usuario','faturamento')
     and exists (select 1 from supplier s where s.id = supplier_fiscal_doc.supplier_id)
   );
 drop policy if exists p_sfd_admin_write on supplier_fiscal_doc;
@@ -3759,6 +3759,11 @@ drop trigger if exists trg_fueling_before_authorization on fueling;
 create trigger trg_fueling_before_authorization
   before insert or update of date, authorization_id on fueling
   for each row execute function block_fueling_before_authorization();
+
+-- Perfil "faturamento" (out/2026): só o módulo de faturamento, município inteiro.
+-- As políticas de leitura e as funções do faturamento acima já o aceitam
+-- (comparação por ::text para o apply.sql poder criar o valor do enum na mesma
+-- transação). Não escreve em autorização, abastecimento nem cadastros.
 
 -- =============================================================================
 -- 13) Força reload do schema cache do PostgREST

@@ -1,7 +1,8 @@
 // Entry point — verifica sessão, monta shell ou tela de login, e roteia.
-import { loadSession, getSession, onAuthChange } from './auth.js';
+import { loadSession, getSession, getProfile, onAuthChange } from './auth.js';
 import { renderLogin } from './pages/login.js';
-import { renderShell, NAV, updateActiveNav, updateBreadcrumb } from './shell.js';
+import { renderShell, updateActiveNav, updateBreadcrumb, canAccess, defaultPath } from './shell.js';
+import { renderInicio } from './pages/inicio.js';
 import { renderPlaceholder } from './pages/placeholder.js';
 import { renderEntidade } from './pages/entidade.js';
 import { renderUsuarios } from './pages/usuarios.js';
@@ -20,21 +21,31 @@ import { register, navigate, setOnChange, start, currentPath } from './router.js
 import { toast } from './ui.js';
 import { registerSW } from './pwa.js';
 
+// Cada rota só abre para quem tem o perfil; senão volta à página inicial do perfil.
+function guarded(path, render) {
+  return async (ctx) => {
+    const role = getProfile()?.role;
+    if (role && !canAccess(path, role)) { navigate(defaultPath(role), true); return; }
+    await render(ctx);
+  };
+}
+
 // Registra rotas. Páginas não-implementadas usam placeholder.
 function registerRoutes() {
-  register('/dashboard',      renderDashboard);
-  register('/entidade',       renderEntidade);
-  register('/usuarios',       renderUsuarios);
-  register('/secretarias',    renderSecretarias);
-  register('/veiculos',       renderVeiculos);
-  register('/motoristas',     renderMotoristas);
-  register('/fornecedores',   renderFornecedores);
-  register('/autorizacoes',   renderAutorizacoes);
-  register('/abastecimentos', renderAbastecimentos);
-  register('/manutencoes',    renderManutencoes);
-  register('/faturamento',    renderFaturamento);
-  register('/relatorios',     renderRelatorios);
-  register('/exportacao',     renderExportacao);
+  register('/inicio',         renderInicio);
+  register('/dashboard',      guarded('/dashboard', renderDashboard));
+  register('/entidade',       guarded('/entidade', renderEntidade));
+  register('/usuarios',       guarded('/usuarios', renderUsuarios));
+  register('/secretarias',    guarded('/secretarias', renderSecretarias));
+  register('/veiculos',       guarded('/veiculos', renderVeiculos));
+  register('/motoristas',     guarded('/motoristas', renderMotoristas));
+  register('/fornecedores',   guarded('/fornecedores', renderFornecedores));
+  register('/autorizacoes',   guarded('/autorizacoes', renderAutorizacoes));
+  register('/abastecimentos', guarded('/abastecimentos', renderAbastecimentos));
+  register('/manutencoes',    guarded('/manutencoes', renderManutencoes));
+  register('/faturamento',    guarded('/faturamento', renderFaturamento));
+  register('/relatorios',     guarded('/relatorios', renderRelatorios));
+  register('/exportacao',     guarded('/exportacao', renderExportacao));
   register('*',               () => renderPlaceholder('Página não encontrada'));
 }
 
@@ -46,9 +57,10 @@ setOnChange((cur) => {
   }
 });
 
+// Sem rota na URL: entra na página inicial do perfil (celular → Início; computador → Dashboard)
 function ensureHash() {
   if (!location.hash || location.hash === '#' || location.hash === '#/') {
-    history.replaceState(null, '', location.pathname + location.search + '#/dashboard');
+    history.replaceState(null, '', location.pathname + location.search + '#' + defaultPath(getProfile()?.role));
   }
 }
 

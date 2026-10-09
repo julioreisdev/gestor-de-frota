@@ -15,7 +15,7 @@ let _search = '';
 let _filter = { dept: '', status: '' };
 let _ctx = null;
 
-const canWrite = () => ['admin', 'usuario'].includes(getProfile()?.role);
+const canWrite = () => ['admin', 'usuario', 'faturamento'].includes(getProfile()?.role);
 
 export async function renderTermsTab(container, ctx) {
   _ctx = ctx;

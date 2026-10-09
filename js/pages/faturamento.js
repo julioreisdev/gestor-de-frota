@@ -1,8 +1,9 @@
 // =============================================================================
 // FATURAMENTO — Ordem de Fornecimento e Termo de Recebimento (combustível)
 // Entrada da página: abas conforme o perfil.
-//   admin      → Ordens · Termos · Nova ordem · Configuração
-//   usuario    → Ordens · Termos · Nova ordem
+//   admin       → Ordens · Termos · Nova ordem · Configuração
+//   usuario     → Ordens · Termos · Nova ordem
+//   faturamento → Ordens · Termos · Nova ordem (é a única página desse perfil)
 //   fornecedor → Ordens (só leitura)
 // =============================================================================
 import { pageRoot, pageHeader } from '../shell.js';
@@ -34,7 +35,7 @@ document.addEventListener('click', (e) => {
 function allowedTabs() {
   const role = getProfile()?.role;
   if (role === 'admin') return ['orders', 'terms', 'new', 'config'];
-  if (role === 'usuario') return ['orders', 'terms', 'new'];
+  if (role === 'usuario' || role === 'faturamento') return ['orders', 'terms', 'new'];
   return ['orders'];
 }
 

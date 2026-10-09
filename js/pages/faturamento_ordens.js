@@ -17,7 +17,7 @@ let _ctx = null;
 // false quando o banco ainda não recebeu a parte do Termo de Recebimento
 let _hasTerms = true;
 
-const canWrite = () => ['admin', 'usuario'].includes(getProfile()?.role);
+const canWrite = () => ['admin', 'usuario', 'faturamento'].includes(getProfile()?.role);
 const isSupplier = () => getProfile()?.role === 'fornecedor';
 const activeTerm = (o) => (o.terms || []).find(t => t.status === 'emitido') || null;
 const canceledTerms = (o) => (o.terms || []).filter(t => t.status === 'cancelado');

@@ -1678,5 +1678,209 @@ create trigger trg_fueling_before_authorization
   before insert or update of date, authorization_id on fueling
   for each row execute function block_fueling_before_authorization();
 
+-- =============================================================================
+-- 21) PERFIL "FATURAMENTO" (out/2026)
+--   Usuário que só vê o módulo de faturamento (ordens, termos, nova ordem), do
+--   município inteiro. Lê contratos, veículos e abastecimentos (precisa para
+--   montar a ordem), não escreve neles. Políticas comparam por ::text porque o
+--   valor novo do enum não pode ser usado como literal na mesma transação.
+-- Idempotente.
+-- =============================================================================
+alter type user_role add value if not exists 'faturamento';
+
+drop policy if exists p_supplier_read_internal on supplier;
+create policy p_supplier_read_internal on supplier for select
+  using (
+    current_user_role() = 'admin'
+    or (current_user_role()::text in ('usuario','faturamento')
+        and (current_user_department_id() is null
+             or department_id is null
+             or department_id = current_user_department_id()))
+  );
+
+drop policy if exists p_supfuel_read_internal on supplier_fuel;
+create policy p_supfuel_read_internal on supplier_fuel for select
+  using (
+    current_user_role() = 'admin'
+    or (current_user_role()::text in ('usuario','faturamento')
+        and (current_user_department_id() is null
+             or exists (
+               select 1 from supplier s
+                where s.id = supplier_fuel.supplier_id
+                  and (s.department_id is null
+                       or s.department_id = current_user_department_id())
+             )))
+  );
+
+drop policy if exists p_sfd_read on supplier_fiscal_doc;
+create policy p_sfd_read on supplier_fiscal_doc for select
+  using (
+    current_user_role()::text in ('admin','usuario','faturamento')
+    and exists (select 1 from supplier s where s.id = supplier_fiscal_doc.supplier_id)
+  );
+
+drop policy if exists p_vehicle_read_internal on vehicle;
+create policy p_vehicle_read_internal on vehicle for select
+  using (
+    current_user_role() = 'admin'
+    or (current_user_role()::text in ('usuario','faturamento')
+        and (current_user_department_id() is null
+             or department_id is null
+             or department_id = current_user_department_id()))
+  );
+
+drop policy if exists p_fueling_read_internal on fueling;
+create policy p_fueling_read_internal on fueling for select
+  using (
+    current_user_role() = 'admin'
+    or (current_user_role()::text in ('usuario','faturamento')
+        and (current_user_department_id() is null
+             or exists (
+               select 1 from vehicle v
+                where v.id = fueling.vehicle_id
+                  and (v.department_id is null
+                       or v.department_id = current_user_department_id())
+             )))
+  );
+
+drop policy if exists p_so_read_internal on supply_order;
+create policy p_so_read_internal on supply_order for select
+  using (
+    current_user_role() = 'admin'
+    or (current_user_role()::text in ('usuario','faturamento')
+        and (current_user_department_id() is null
+             or department_id = current_user_department_id()))
+  );
+
+drop policy if exists p_rt_read on receipt_term;
+create policy p_rt_read on receipt_term for select
+  using (
+    current_user_role()::text in ('admin','usuario','faturamento')
+    and exists (select 1 from supply_order o where o.id = receipt_term.supply_order_id)
+  );
+
+create or replace function _billing_require(p_department uuid) returns void
+language plpgsql stable security definer set search_path = public, auth as $$
+declare v_role user_role; v_dept uuid;
+begin
+  v_role := current_user_role();
+  if v_role is null or v_role not in ('admin','usuario','faturamento') then
+    raise exception 'Seu perfil não tem acesso ao faturamento.' using errcode = '42501';
+  end if;
+  if v_role = 'usuario' then
+    v_dept := current_user_department_id();
+    if v_dept is not null and v_dept is distinct from p_department then
+      raise exception 'Você só pode faturar a sua secretaria.' using errcode = '42501';
+    end if;
+  end if;
+end;
+$$;
+revoke all on function _billing_require(uuid) from public;
+grant execute on function _billing_require(uuid) to authenticated;
+
+create or replace function billing_unbilled_summary()
+returns table (fuelings integer, liters numeric, contracts integer, oldest date)
+language plpgsql stable security definer set search_path = public, auth as $$
+#variable_conflict use_column
+declare v_role user_role; v_dept uuid; v_start date;
+begin
+  v_role := current_user_role();
+  if v_role is null or v_role not in ('admin','usuario','faturamento') then return; end if;
+  if v_role = 'usuario' then v_dept := current_user_department_id(); end if;
+  select e.billing_start_date into v_start from entity e where e.id = 1;
+  if v_start is null then return; end if;
+  return query
+    select count(*)::integer, coalesce(sum(f.quantity), 0)::numeric,
+           count(distinct f.supplier_id)::integer, min(f.date)
+      from fueling f
+      join supplier s on s.id = f.supplier_id
+     where f.deleted_at is null
+       and f.supply_order_id is null
+       and f.date >= v_start
+       and f.date < date_trunc('month', current_date)::date
+       and s.kind in ('posto','ambos')
+       and s.department_id is not null
+       and (v_dept is null or s.department_id = v_dept);
+end;
+$$;
+revoke all on function billing_unbilled_summary() from public;
+grant execute on function billing_unbilled_summary() to authenticated;
+
+create or replace function supply_order_fuelings(p_order uuid)
+returns table (
+  fueling_id uuid, fueling_date date, authorization_number text,
+  vehicle_id uuid, plate text, vehicle_model text, vehicle_type_code smallint,
+  fuel_type_code smallint, fuel_subtype_id smallint, fuel_label text,
+  liters numeric, km_initial integer, km_final integer,
+  unit_price numeric, line_no integer
+)
+language plpgsql stable security definer set search_path = public, auth as $$
+#variable_conflict use_column
+declare v_o supply_order%rowtype; v_role user_role;
+begin
+  select * into v_o from supply_order o where o.id = p_order;
+  if v_o.id is null then return; end if;
+  v_role := current_user_role();
+  if v_role in ('admin','faturamento') then null;
+  elsif v_role = 'usuario' then
+    if current_user_department_id() is not null
+       and current_user_department_id() is distinct from v_o.department_id then return; end if;
+  elsif v_role = 'fornecedor' then
+    if v_o.supplier_id not in (select current_user_supplier_ids()) then return; end if;
+  else
+    return;
+  end if;
+  return query
+    select sf.fueling_id, sf.fueling_date, sf.authorization_number,
+           sf.vehicle_id, sf.plate, sf.vehicle_model, sf.vehicle_type_code,
+           sf.fuel_type_code, sf.fuel_subtype_id, sf.fuel_label,
+           sf.liters::numeric, sf.km_initial, sf.km_final,
+           sf.unit_price::numeric, sf.line_no
+      from supply_order_fueling sf
+     where sf.supply_order_id = p_order
+     order by sf.line_no;
+end;
+$$;
+revoke all on function supply_order_fuelings(uuid) from public;
+grant execute on function supply_order_fuelings(uuid) to authenticated;
+
+create or replace function receipt_term_fuelings(p_term uuid)
+returns table (
+  line_no integer, fueling_date date, authorization_number text,
+  vehicle_id uuid, plate text, vehicle_model text, vehicle_type_code smallint,
+  fuel_label text, liters numeric, km_initial integer, km_final integer,
+  unit_price numeric, amount numeric
+)
+language plpgsql stable security definer set search_path = public, auth as $$
+#variable_conflict use_column
+declare v_dept uuid; v_role user_role;
+begin
+  select o.department_id into v_dept
+    from receipt_term t join supply_order o on o.id = t.supply_order_id
+   where t.id = p_term;
+  if v_dept is null then return; end if;
+  v_role := current_user_role();
+  if v_role in ('admin','faturamento') then null;
+  elsif v_role = 'usuario' then
+    if current_user_department_id() is not null
+       and current_user_department_id() is distinct from v_dept then return; end if;
+  else
+    return;
+  end if;
+  return query
+    select sf.line_no, sf.fueling_date, sf.authorization_number,
+           sf.vehicle_id, sf.plate, sf.vehicle_model, sf.vehicle_type_code,
+           sf.fuel_label, sf.liters::numeric, sf.km_initial, sf.km_final,
+           tf.unit_price::numeric, tf.amount::numeric
+      from receipt_term_fueling tf
+      join supply_order_fueling sf on sf.id = tf.order_fueling_id
+     where tf.receipt_term_id = p_term
+     order by sf.line_no;
+end;
+$$;
+revoke all on function receipt_term_fuelings(uuid) from public;
+grant execute on function receipt_term_fuelings(uuid) to authenticated;
+
+
 -- Reload do schema cache do PostgREST
 notify pgrst, 'reload schema';

@@ -93,6 +93,13 @@ Reaproveitar o módulo `js/print.js` que já existe.
 | `admin` | Tudo: cadastros, autorizações, abastecimentos, manutenções, relatórios, exportações, gestão de usuários |
 | `usuario` | Autorizações, abastecimentos, relatórios, exportações |
 | `fornecedor` | Somente autorizações (visão restrita pra preencher abastecimento via QR) |
+| `faturamento` | Só o Faturamento (Ordens, Termos, Nova ordem), de todas as secretarias. Não escreve em cadastro, autorização nem abastecimento. Políticas de leitura comparam `current_user_role()::text` (o valor novo do enum não pode ser literal na mesma transação do `apply.sql`). |
+
+A rota de cada página só abre para os perfis listados em `NAV` ([js/shell.js](js/shell.js)); `app.js` envolve as rotas com `guarded()` e manda o perfil para `defaultPath()` quando não pode.
+
+### Layout de aplicativo (≤ 900 px)
+
+Tablet e celular não têm sidebar: marca na topbar, **barra inferior** por perfil (`MOBILE_BAR` em [js/shell.js](js/shell.js), rótulos curtos em `BAR_LABEL`) e folha **"Mais"** com o restante das páginas, usuário, Instalar e Sair. A rota `/inicio` ([js/pages/inicio.js](js/pages/inicio.js)) é a tela de entrada no celular (blocos por página, nos grupos de `NAV`); no computador a entrada continua o Dashboard. Ao criar página nova: acrescentar em `NAV` (e em `SUBTITLE` do Início); a barra inferior só muda se for página principal do perfil.
 
 ## Códigos TCE-PI (tabelas de domínio oficiais)
 
@@ -319,7 +326,7 @@ O `cliente.html` foi gerado por IA e tem coisas que **não** vão pra produção
 - `/docs` populado com **specs oficiais do TCE-PI** (manuais técnicos mar/2026, regras de validação mar–mai/2026, leiautes 2025, planilhas de domínio, CSVs de exemplo, lista IBGE). Tudo lido e consolidado neste arquivo.
 - `modelagem.md` na raiz: proposta inicial de schema Supabase (histórica; o schema real é o `init.sql`).
 - Sistema em produção em duas instâncias: Jurema e Anísio de Abreu.
-- Faturamento e Motoristas publicados em 28/09/2026; ajustes v2.1 e logo nova em out/2026.
+- Faturamento e Motoristas publicados em 28/09/2026; ajustes v2.1 e logo nova em out/2026; perfil `faturamento` e layout de aplicativo (barra inferior) em out/2026.
 - Próximos passos serão definidos pelo usuário (lembrete: **nunca começar sem perguntar**).
 
 ## Faturamento e Motoristas (set/2026)
